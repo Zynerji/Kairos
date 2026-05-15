@@ -63,15 +63,52 @@ class KairosCurriculum(BaseCallback):
     name = "KairosCurriculum"
 
     def __init__(self, settings: dict[Phase, PhaseSettings] | None = None,
-                 optimizer: Any | None = None) -> None:
+                 optimizer: Any | None = None,
+                 hysteresis_steps: int = 800,
+                 ratchet_phases: tuple[Phase, ...] = (
+                     Phase.NEAR_CRITICAL, Phase.DRIFTING, Phase.POST,
+                 )) -> None:
+        """Hysteresis-stabilised phase-aware optimizer settings.
+
+        On the slow-grok regime Cassandra's regime flips between
+        `drifting` and `stable` every ~200 steps as the test_loss
+        noise lands above/below threshold within the diagnostic
+        window. The unstabilised curriculum responded by flipping
+        LR/WD just as fast, which broke training.
+
+        Two stabilisations:
+
+          - `hysteresis_steps`: once a phase changes, hold it for
+            at least this many steps before allowing another change.
+            Filters Cassandra's per-check noise.
+          - `ratchet_phases`: once we enter one of these "deeper"
+            phases (the transition is happening), do NOT go back to
+            an earlier phase. Phases ratchet forward through the
+            training run.
+        """
         merged = dict(_DEFAULT_SETTINGS)
         if settings is not None:
             for k, v in settings.items():
                 merged[Phase(k) if isinstance(k, str) else k] = v
         self.settings = merged
         self.optimizer = optimizer
+        self.hysteresis_steps = int(hysteresis_steps)
+        self.ratchet_phases = tuple(ratchet_phases)
         self._last_phase: Phase = Phase.UNKNOWN
+        self._last_change_step: int = -1
         self._initial: list[tuple[float, float]] | None = None
+        # Ratchet ordering: higher index = "deeper" in the training
+        # progression. Once we reach a ratchet phase at this index or
+        # higher, never regress below it.
+        self._phase_order: dict[Phase, int] = {
+            Phase.UNKNOWN: 0,
+            Phase.MEMORISING: 1,
+            Phase.PLATEAU: 2,
+            Phase.NEAR_CRITICAL: 3,
+            Phase.DRIFTING: 3,           # equal weight to near_critical
+            Phase.POST: 4,
+        }
+        self._max_seen_order: int = 0
 
     def _capture_initial(self) -> None:
         if self.optimizer is None or self._initial is not None:
@@ -88,20 +125,41 @@ class KairosCurriculum(BaseCallback):
             g["lr"] = lr0 * settings.lr_multiplier
             g["weight_decay"] = wd0 * settings.weight_decay_multiplier
 
+    def _ratchet_filter(self, proposed: Phase) -> Phase:
+        """Don't allow regressing below the deepest phase we've seen.
+
+        Once we've been in `near_critical` or `drifting`, we stay
+        there (or move to `post`); we never go back to `plateau` /
+        `memorising`. Filters Cassandra's per-check noise.
+        """
+        ord_new = self._phase_order.get(proposed, 0)
+        self._max_seen_order = max(self._max_seen_order, ord_new)
+        if ord_new < self._max_seen_order:
+            # We've seen a deeper phase already; refuse to regress.
+            for ph, o in self._phase_order.items():
+                if o == self._max_seen_order:
+                    return ph
+        return proposed
+
     def observe(self, step: int, monitor: GrokkingMonitor,
                 **metrics: Any) -> Action:
         self._capture_initial()
-        # Use the bundle-supplied phase if available; else infer from
-        # train_acc/test_acc fallbacks the same way core._classify_phase
-        # does (but we usually get it via Action.phase merging).
         from .core import _classify_phase
-        phase = _classify_phase(
+        raw_phase = _classify_phase(
             monitor, metrics.get("train_acc"), metrics.get("test_acc"),
         )
-        settings = self.settings.get(phase, _DEFAULT_SETTINGS[Phase.UNKNOWN])
+        # Apply ratchet: don't regress below the deepest phase seen
+        phase = self._ratchet_filter(raw_phase)
+        # Apply hysteresis: don't flip phase faster than the cooldown
         if phase != self._last_phase:
+            if (self._last_change_step >= 0
+                    and step - self._last_change_step < self.hysteresis_steps):
+                # In cooldown; ignore the proposed change
+                return Action(phase=self._last_phase)
+            settings = self.settings.get(phase, _DEFAULT_SETTINGS[Phase.UNKNOWN])
             self._apply_to_optimizer(settings)
             self._last_phase = phase
+            self._last_change_step = int(step)
             return Action(
                 lr_multiplier=settings.lr_multiplier,
                 weight_decay_multiplier=settings.weight_decay_multiplier,

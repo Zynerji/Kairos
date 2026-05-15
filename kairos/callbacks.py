@@ -122,14 +122,14 @@ class KairosLRSchedule(BaseCallback):
                 **metrics: Any) -> Action:
         if self._dropped:
             return Action()
-        state = monitor.state()
-        diag = state.last_cassandra_diagnosis
-        if diag is None:
+        # Gate on the *confirmed* grokking event, not raw Cassandra
+        # regime. On slow-grok runs the regime flips into `drifting`
+        # thousands of steps before actual generalisation; dropping
+        # LR that early froze training (validated 2026-05-15 head-to-
+        # head: KAIROS-C with raw-regime gating got 0.154 final
+        # test_acc vs BASELINE 0.365).
+        if monitor.detected_event is None:
             return Action()
-        regime = diag.get("regime")
-        if regime not in {"near_critical", "drifting"}:
-            return Action()
-        # Direct optimizer mutation if provided
         if self.optimizer is not None:
             for g in self.optimizer.param_groups:
                 g["lr"] = float(g["lr"]) * self.drop_factor
@@ -138,7 +138,7 @@ class KairosLRSchedule(BaseCallback):
             lr_multiplier=self.drop_factor,
             notes=[
                 f"LR dropped by {self.drop_factor:.3f} at step {step} "
-                f"(Cassandra regime={regime})",
+                f"(GrokkingMonitor confirmed grokking event)",
             ],
         )
 

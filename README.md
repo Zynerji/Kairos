@@ -2,26 +2,49 @@
 
 > *καιρός* — Greek: "the right moment, the critical time"
 
-**Grokking-aware training-optimizer toolkit.** Catches the moment a
-neural network transitions from memorisation to generalisation and
+**Grokking-aware training-optimizer toolkit.** Built on
+[Grokking-Monitor](https://github.com/Zynerji/Grokking-Monitor) and
+[Cassandra](https://github.com/Zynerji/Cassandra). Detects the
+moment a network transitions from memorisation to generalisation and
 acts on it.
 
-Built on [Grokking-Monitor](https://github.com/Zynerji/Grokking-Monitor)
-and [Cassandra](https://github.com/Zynerji/Cassandra).
+## Components — what ships vs what's research
 
-## The seven components
-
-| # | Component | What it does | When to use |
+| # | Component | Use today? | Why |
 |---|---|---|---|
-| 1 | `KairosEarlyStop`    | Abort runs that won't grok (memorisation-only) | Hyperparameter sweeps, expensive runs |
-| 2 | `KairosLRSchedule`   | Drop LR ~10× at the grokking transition | Almost always |
-| 3 | `KairosCheckpoint`   | Snapshot model at the transition | Always — you want this checkpoint |
-| 4 | `KairosSweepGate`    | Kill losing trials at step K | Multi-trial hparam search |
-| 5 | `KairosAccelerator`  | Weight-noise pulses during the plateau (research) | When grokking is too slow |
-| 6 | `KairosCurriculum`   | Phase-aware lr / wd settings | When you want a phase-driven schedule |
-| 7 | `KairosProbe`        | Generic capability-emergence probe | Tracking many emergent skills in parallel |
+| 1 | `KairosEarlyStop`    | ✅ ship       | Clear compute savings on dead-end runs. Validated on GPU. |
+| 2 | `KairosLRSchedule`   | ⚠️ careful    | Gates on `monitor.detected_event`, not raw Cassandra regime. Helps on sharp groks; no-op on slow groks. |
+| 3 | `KairosCheckpoint`   | ✅ ship       | Gates on `monitor.detected_event`. Captures the right state on sharp groks. |
+| 4 | `KairosSweepGate`    | ✅ ship       | Multi-trial allocator. Validated to rank grokking trial above memorising trial. |
+| 5 | `KairosAccelerator`  | 🔬 research   | Weight-noise pulses during plateau. Stops firing when Cassandra signals movement — to prevent disrupting an emerging solution. |
+| 6 | `KairosCurriculum`   | 🔬 research   | Phase-aware LR/WD. Includes hysteresis + ratchet to handle Cassandra regime flapping on slow-grok runs. |
+| 7 | `KairosProbe`        | 🔬 research   | Tracks multiple capability scores in parallel; flags emergence precursors. |
 
-## Quick start: minimal training loop
+## Honest empirical findings (modular arithmetic on RTX PRO 4000 Blackwell)
+
+We ran head-to-heads on `(a + b) mod 29` with `AdamW(lr=1e-3, wd=1.0)`,
+2-layer Transformer (~ 540k params), 15K steps.
+
+**Slow-grok regime** (the canonical CPU/small-model case):
+* Train accuracy reaches 1.0 by step ~150
+* Test accuracy creeps from 0.05 toward ~ 0.4 over 15K steps
+* No sharp transition; monitor never fires `detected_event`
+* Therefore LRSchedule + Checkpoint are no-ops here — exactly the right behaviour
+* Conservative bundle (EarlyStop + LRSchedule + Checkpoint) behaves like baseline
+
+**Active steering on slow-grok runs HURT in our v0.1.0 prerelease config.**
+The pre-release `KairosLRSchedule` dropped LR on raw `drifting` regime
+(which fires thousands of steps before grokking on slow groks);
+dropped from `0.365` baseline to `0.154` test_acc. We fixed it: now
+gates on the confirmed event. Same root-cause issue we found and
+documented for `KairosAccelerator` and `KairosCurriculum`; both got
+hysteresis / ratchet semantics in response.
+
+**Clear win**: `KairosEarlyStop` on dead-end runs (no grok signature
+within budget) demonstrably saves compute. See
+`examples/early_stop_demo.py` for the validated numbers.
+
+## Quick start
 
 ```python
 from kairos import (
@@ -30,11 +53,9 @@ from kairos import (
 )
 
 bundle = CallbackBundle(
-    KairosEarlyStop(stable_steps_to_abort=20_000, min_step=1000),
+    KairosEarlyStop(stable_steps_to_abort=10_000, min_step=2000),
     KairosLRSchedule(drop_factor=0.1, optimizer=opt),
     KairosCheckpoint(save_dir="checkpoints/"),
-    KairosAccelerator(sigma=0.005, wait_steps=2000, max_pulses=8),
-    KairosCurriculum(optimizer=opt),
 )
 
 for step in range(n_steps):
@@ -50,38 +71,10 @@ for step in range(n_steps):
         break
 ```
 
-The `Action` returned by `observe()` carries every decision the
-components reached — `stop_training`, `lr_multiplier`,
-`weight_decay_multiplier`, `save_checkpoint`, `inject_noise_sigma`,
-plus `phase` and human-readable `notes`.
-
 ## Framework integrations
 
-### HuggingFace Transformers
-
-```python
-from transformers import Trainer
-from kairos.integrations import KairosHFCallback
-
-trainer = Trainer(
-    model=model, args=args, ...,
-    callbacks=[KairosHFCallback(bundle, save_dir="checkpoints/")],
-)
-trainer.train()
-```
-
-### PyTorch Lightning
-
-```python
-import pytorch_lightning as pl
-from kairos.integrations import KairosLightningCallback
-
-trainer = pl.Trainer(
-    max_steps=n_steps,
-    callbacks=[KairosLightningCallback(bundle, save_dir="checkpoints/")],
-)
-trainer.fit(model, dataloader)
-```
+* `from kairos.integrations import KairosHFCallback`        # HuggingFace Trainer
+* `from kairos.integrations import KairosLightningCallback`  # PyTorch Lightning
 
 ## Hyperparameter sweeps
 
@@ -97,50 +90,22 @@ for step in range(...):
         for trial_id, dec in gate.make_decisions().items():
             if dec.kill:
                 trials[trial_id].alive = False
-                print(f"killed {trial_id}: {dec.reason}")
-```
-
-## Probing capability emergence (research)
-
-```python
-from kairos import KairosProbe
-
-probe = KairosProbe()
-for step in eval_steps:
-    scores = {"icl": eval_icl(model), "cot": eval_cot(model),
-              "multi_hop": eval_multi_hop(model)}
-    probe.observe(step, scores=scores)
-
-for report in probe.diagnose():
-    if report.likely_to_emerge_next:
-        print(f"{report.capability} approaching emergence "
-              f"(regime={report.regime}, AR(1) τ={report.ar1_trend_tau:+.2f})")
 ```
 
 ## Phase classification
 
-Each `observe()` returns a `Phase`:
+`Action.phase` is one of: `MEMORISING`, `PLATEAU`, `NEAR_CRITICAL`,
+`DRIFTING`, `POST`, `UNKNOWN`. `KairosCurriculum`'s ratchet means the
+phase never regresses below the deepest one observed.
 
-| Phase | Meaning |
-|---|---|
-| `MEMORISING` | train_acc < memorisation_threshold |
-| `PLATEAU` | train_acc ≈ 1, test_acc near chance |
-| `NEAR_CRITICAL` | Cassandra CSD signature; transition imminent |
-| `DRIFTING` | Cassandra signals movement; test metrics changing |
-| `POST` | Grokking event detected; test_acc high |
-
-## Real-training validation
-
-See `examples/train_with_kairos.py` for an end-to-end head-to-head:
-baseline AdamW Transformer vs. Kairos-wrapped version, same seed,
-same hparams. Demonstrates early-stop on memorisation-only runs,
-LR drop at transition, and accelerator pulses during the plateau.
-
-## Tests
+## Tests + demos
 
 ```bash
 pip install -e .
-python -m pytest tests/ -q          # 23 tests, < 10s
+python -m pytest tests/ -q                            # 23 tests
+python examples/early_stop_demo.py                    # the demonstrated win
+python examples/train_with_kairos.py --mode all       # baseline / kairos-c / kairos-f
+python examples/sweep_demo.py                         # KairosSweepGate ranking
 ```
 
 ## License

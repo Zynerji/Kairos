@@ -126,7 +126,7 @@ def train_once(
 
     opt = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1.0)
     bundle = None
-    if use_kairos:
+    if use_kairos == "full":
         bundle = CallbackBundle(
             KairosEarlyStop(stable_steps_to_abort=20_000, min_step=2000),
             KairosLRSchedule(drop_factor=0.1, optimizer=opt),
@@ -134,6 +134,15 @@ def train_once(
             KairosAccelerator(sigma=0.005, wait_steps=2000,
                               cooldown_steps=2000, max_pulses=8, auto_apply=True),
             KairosCurriculum(optimizer=opt),
+        )
+    elif use_kairos == "conservative":
+        # The shippable subset: EarlyStop + LRSchedule + Checkpoint.
+        # No accelerator (perturbation), no curriculum (phase-flapping
+        # was hurting on the slow-grok regime).
+        bundle = CallbackBundle(
+            KairosEarlyStop(stable_steps_to_abort=20_000, min_step=2000),
+            KairosLRSchedule(drop_factor=0.1, optimizer=opt),
+            KairosCheckpoint(save_dir=checkpoint_dir),
         )
 
     history: list[dict] = []
@@ -201,8 +210,9 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default="kairos_checkpoints")
-    parser.add_argument("--mode", choices=("both", "baseline", "kairos"),
-                        default="both")
+    parser.add_argument("--mode",
+                        choices=("all", "baseline", "kairos_full", "kairos_conservative"),
+                        default="all")
     parser.add_argument("--out", type=str,
                         default="train_with_kairos_results.json")
     args = parser.parse_args()
@@ -218,17 +228,23 @@ def main():
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     results = []
-    if args.mode in ("baseline", "both"):
+    if args.mode in ("baseline", "all"):
         results.append(train_once(
             label="BASELINE", p=args.p, train_frac=args.train_frac,
-            n_steps=args.n_steps, seed=args.seed, use_kairos=False,
+            n_steps=args.n_steps, seed=args.seed, use_kairos=None,
             device=device, checkpoint_dir=None,
         ))
-    if args.mode in ("kairos", "both"):
+    if args.mode in ("kairos_conservative", "all"):
         results.append(train_once(
-            label="KAIROS  ", p=args.p, train_frac=args.train_frac,
-            n_steps=args.n_steps, seed=args.seed, use_kairos=True,
-            device=device, checkpoint_dir=ckpt_dir,
+            label="KAIROS-C", p=args.p, train_frac=args.train_frac,
+            n_steps=args.n_steps, seed=args.seed, use_kairos="conservative",
+            device=device, checkpoint_dir=ckpt_dir / "conservative",
+        ))
+    if args.mode in ("kairos_full", "all"):
+        results.append(train_once(
+            label="KAIROS-F", p=args.p, train_frac=args.train_frac,
+            n_steps=args.n_steps, seed=args.seed, use_kairos="full",
+            device=device, checkpoint_dir=ckpt_dir / "full",
         ))
 
     print()

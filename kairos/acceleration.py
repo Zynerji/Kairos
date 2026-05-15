@@ -92,6 +92,15 @@ class KairosAccelerator(BaseCallback):
             return Action()  # transition already happened; don't perturb
         if self._n_pulses >= self.max_pulses:
             return Action()
+        # Pulses are only useful in the FLAT plateau; once Cassandra
+        # signals any movement (drifting / near_critical), pulses
+        # disrupt the emerging solution. Stop firing.
+        state = monitor.state()
+        diag = state.last_cassandra_diagnosis
+        if diag is not None and diag.get("regime") in {
+            "drifting", "near_critical", "post",
+        }:
+            return Action()
         train_acc = metrics.get("train_acc")
         if train_acc is None:
             return Action()
