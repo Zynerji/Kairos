@@ -175,9 +175,23 @@ def test_alpha_invalid_raises():
     book = WeightDeltaCodebook()
     book.build(orig, abl)
     with pytest.raises(ValueError):
-        book.apply_restoration(abl, cap, alpha=1.5)
-    with pytest.raises(ValueError):
         book.apply_restoration(abl, cap, alpha=-0.1)
+
+
+def test_alpha_over_injection_allowed():
+    """alpha > 1 = over-injection. Should NOT raise — useful for
+    diagnosing whether capability/refusal directions are coupled."""
+    orig, abl, _r = _make_synthetic_pair()
+    cap = _identity_capability(d=16, k=3)
+    book = WeightDeltaCodebook()
+    book.build(orig, abl)
+    healed = book.apply_restoration(abl, cap, alpha=2.5)
+    # Over-injection means weights move farther from abliterated.
+    diff = sum(
+        float((healed[k].float() - abl[k].float()).norm())
+        for k in abl if k in healed and abl[k].dim() == 2
+    )
+    assert diff > 0
 
 
 def _identity_capability(d, k):

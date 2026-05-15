@@ -89,11 +89,16 @@ class WeightDeltaCodebook:
     """
 
     def __init__(self, *, keep_full_delta: bool = False,
-                 rank1_threshold: float = 0.95) -> None:
+                 rank1_threshold: float = 0.95,
+                 svd_device: str | None = None) -> None:
         if not (0.0 < rank1_threshold <= 1.0):
             raise ValueError("rank1_threshold must be in (0, 1]")
         self.keep_full_delta = bool(keep_full_delta)
         self.rank1_threshold = float(rank1_threshold)
+        # Where to run the per-layer SVD. ``None`` = autodetect CUDA.
+        # CPU SVD on 1536x6144 matrices takes ~minutes; GPU does it in
+        # milliseconds.
+        self.svd_device = svd_device
         self._layers: dict[str, LayerDelta] = {}
         self.report = CodebookReport()
 
@@ -122,6 +127,10 @@ class WeightDeltaCodebook:
         self._layers.clear()
         self.report = CodebookReport()
 
+        device = self.svd_device
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
         for name, w_orig in original_state_dict.items():
             if not any(name.endswith(s) for s in target_suffixes):
                 continue
@@ -137,12 +146,14 @@ class WeightDeltaCodebook:
                 # norms, embeddings.
                 continue
 
-            delta = (w_orig.float() - w_abl.float())
+            # Compute delta on the SVD device. fp32 needed for stable SVD.
+            delta = (w_orig.to(device=device, dtype=torch.float32)
+                     - w_abl.to(device=device, dtype=torch.float32))
             # Quick check: layer untouched by abliteration → delta ~ 0
             if float(delta.norm().item()) < 1e-8:
                 continue
 
-            # Top-1 SVD
+            # Top-1 SVD on whichever device we're using
             try:
                 U, S, Vh = torch.linalg.svd(delta, full_matrices=False)
             except RuntimeError:
@@ -152,18 +163,20 @@ class WeightDeltaCodebook:
             top_energy = float((S[0] * S[0]).item())
             r1_frac = top_energy / max(total_energy, 1e-12)
 
+            # Store on CPU to avoid pinning GPU memory across many layers
             entry = LayerDelta(
                 name=name,
                 shape=tuple(delta.shape),
-                u=U[:, 0].clone(),
-                s=S[0].clone(),
-                v=Vh[0, :].clone(),
+                u=U[:, 0].detach().cpu().clone(),
+                s=S[0].detach().cpu().clone(),
+                v=Vh[0, :].detach().cpu().clone(),
                 rank1_fraction=r1_frac,
-                full_delta=delta.clone() if self.keep_full_delta else None,
+                full_delta=delta.detach().cpu().clone() if self.keep_full_delta else None,
             )
             self._layers[name] = entry
             self.report.layer_deltas.append(entry)
             self.report.n_paired += 1
+            del delta, U, S, Vh
         return self.report
 
     # ------------------------------------------------------------------
@@ -234,8 +247,10 @@ class WeightDeltaCodebook:
         """
         import torch
 
-        if not (0.0 <= alpha <= 1.0):
-            raise ValueError(f"alpha must be in [0, 1], got {alpha}")
+        if alpha < 0.0:
+            raise ValueError(f"alpha must be >= 0, got {alpha}")
+        # alpha > 1.0 = over-injection (re-add more than was removed); useful
+        # for diagnosing whether capability + refusal directions are coupled.
 
         out: dict = abliterated_state_dict if in_place else dict(abliterated_state_dict)
         splits = self.split_against_capability(subspace)

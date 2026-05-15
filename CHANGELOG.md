@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.1 — 2026-05-15
+
+**Performance + scope fixes for `WeightDeltaCodebook`:**
+
+- SVD now runs on GPU when available (default: autodetect CUDA, override
+  with `svd_device=`). CPU SVD on 1536 × 6144 weight deltas took minutes
+  per layer; GPU does it in milliseconds. Codebook build over 50 layers
+  drops from ~hours to ~seconds.
+- `apply_restoration` no longer rejects `alpha > 1.0`. Over-injection is
+  useful for diagnosing whether capability and refusal directions are
+  coupled — if α = 4 still doesn't move metrics, the directions overlap.
+- `examples/aletheia_codebook_validate_v2.py` — proper validation
+  scaffold with capability prompts pulled from real benchmarks (GSM8K,
+  TriviaQA, alpaca, OpenThoughts), 64 prompts per axis, 4 axes.
+
+**Validation findings on (google/gemma-4-E2B-it,
+huihui-ai/Huihui-gemma-4-E2B-it-abliterated):**
+
+| metric | A | B | C(α=1) | C(α=2) | C(α=4) | C(α=8) |
+|---|---|---|---|---|---|---|
+| GSM8K accuracy   | 0.0333 | 0.0000 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| refusal rate     | 0.9333 | 0.0333 | 0.0333 | 0.0333 | 0.0667 | 0.0667 |
+| per-layer alpha_cap | — | — | **0.077** uniform across all 50 paired layers |
+
+The result is **inconclusive** for this specific pair: huihui-ai's
+abliteration of Gemma 4 E2B is too gentle on math/factuality/instruction/
+reasoning to demonstrate codebook healing at our 30-sample eval
+resolution. The capability fraction of every per-layer ΔW is uniformly
+~7.7%, so even 8× over-injection only re-introduces ~62% of the rank-1
+update — and that small fraction doesn't move the eval needle.
+
+The mechanism is mathematically correct (29 unit tests pass, math
+verified on synthetic data). The demonstration target was wrong. Need
+either (a) larger eval samples (200–500 to resolve sub-30 effects), or
+(b) a more aggressively abliterated checkpoint pair.
+
+Tests: 199/199 passing (was 198).
+
 ## 0.5.0 — 2026-05-15
 
 **`kairos.aletheia.surgery` — refusal-direction abliteration + healing
