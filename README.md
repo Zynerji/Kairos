@@ -20,29 +20,47 @@ acts on it.
 | 6 | `KairosCurriculum`   | 🔬 research   | Phase-aware LR/WD. Includes hysteresis + ratchet to handle Cassandra regime flapping on slow-grok runs. |
 | 7 | `KairosProbe`        | 🔬 research   | Tracks multiple capability scores in parallel; flags emergence precursors. |
 
-## Honest empirical findings (modular arithmetic on RTX PRO 4000 Blackwell)
+## Empirical results (RTX PRO 4000 Blackwell, p=29 modular arithmetic, AdamW lr=1e-3 wd=1.0)
 
-We ran head-to-heads on `(a + b) mod 29` with `AdamW(lr=1e-3, wd=1.0)`,
-2-layer Transformer (~ 540k params), 15K steps.
+### EarlyStop saves real compute on dead-end runs
 
-**Slow-grok regime** (the canonical CPU/small-model case):
-* Train accuracy reaches 1.0 by step ~150
-* Test accuracy creeps from 0.05 toward ~ 0.4 over 15K steps
-* No sharp transition; monitor never fires `detected_event`
-* Therefore LRSchedule + Checkpoint are no-ops here — exactly the right behaviour
-* Conservative bundle (EarlyStop + LRSchedule + Checkpoint) behaves like baseline
+| | wall clock | steps run | final test_acc |
+|---|---|---|---|
+| BASELINE_DEAD (wd=0.0) | 246.8s | 15,000 | 0.202 |
+| EARLY_STOP_DEAD       | **87.9s** | **10,066** (aborted) | 0.190 |
 
-**Active steering on slow-grok runs HURT in our v0.1.0 prerelease config.**
-The pre-release `KairosLRSchedule` dropped LR on raw `drifting` regime
-(which fires thousands of steps before grokking on slow groks);
-dropped from `0.365` baseline to `0.154` test_acc. We fixed it: now
-gates on the confirmed event. Same root-cause issue we found and
-documented for `KairosAccelerator` and `KairosCurriculum`; both got
-hysteresis / ratchet semantics in response.
+**64% compute saved.** EarlyStop fired at step 10,065 after 10,000
+post-memorisation steps with no grokking signature. Same final test
+accuracy within noise — confirming the run was not going to grok.
 
-**Clear win**: `KairosEarlyStop` on dead-end runs (no grok signature
-within budget) demonstrably saves compute. See
-`examples/early_stop_demo.py` for the validated numbers.
+Reproduce: `python examples/early_stop_demo.py`.
+
+### Slow-grok regime (15K-step head-to-head)
+
+| | wall clock | final test_acc |
+|---|---|---|
+| BASELINE | 211.1s | **0.365** |
+| KAIROS-C (EarlyStop + LRSchedule + Checkpoint) | 236.3s | **0.365** ✓ |
+| KAIROS-F (full stack incl. Accelerator + Curriculum) | 217.2s | 0.168 ✗ |
+
+`KAIROS-C` matches baseline exactly — correct behaviour on a run
+that doesn't grok within budget (LRSchedule + Checkpoint gate on
+`monitor.detected_event`, which never fires here). The +12% wall
+overhead is from Cassandra `diagnose()` calls every 200 steps.
+
+`KAIROS-F` still hurts on this slow-grok regime because the
+accelerator's weight-noise pulses disrupt the slowly-emerging
+solution. **This is why Accelerator + Curriculum are marked
+research; they need a sharper-grok regime than this to demonstrate
+benefit.** Reproducing Power-2022's sharp grok on p=97 with
+high-quality hparams is on the roadmap.
+
+### Validation against synthetic curves (CPU)
+
+23 tests pass on local + VM. Synthetic-curve tests verify that the
+monitor fires on synthetic sharp groks, that EarlyStop doesn't fire
+when grokking, that SweepGate ranks a grokking trial above a
+memorising one, etc.
 
 ## Quick start
 
