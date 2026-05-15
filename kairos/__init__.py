@@ -62,7 +62,7 @@ from .growth_controller import KairosGrowthController, GrowthSignal
 from .antiresonant_init import KairosAntiResonantInit, AntiResonantReport
 from .bundles import recommended_bundle
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "Action",

@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 kairos_checkpoints*/
 *_results.json
+CLAUDE.md
+OptionalExpansion.md

@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.3.1 — 2026-05-15
+
+**HF Trainer integration — first real-model validation**
+
+- `KairosHFCallback` now subclasses `transformers.TrainerCallback`
+  (was duck-typed). HF Trainer 5.x is strict about the callback
+  surface — calls `getattr(callback, event)` for every event
+  including `on_init_end`, which the duck-typed version didn't
+  implement. The subclassing is conditional on `transformers` being
+  importable, so the existing mock-based tests still pass (6/6).
+
+- `examples/gemma4_smoke.py` — single-forward load test for any HF
+  multimodal causal-LM (used to validate Gemma 4 E2B abliterated on a
+  24 GB Blackwell: 5.104B params total, 10.21 GB VRAM after load,
+  forward at 10.28 GB peak).
+
+- `examples/gemma4_lora_sft.py` — LoRA SFT scaffold for Gemma 4
+  multimodal models with three Gemma-4-specific landmines documented:
+  1. PEFT must target the text decoder's projections *only*. Gemma 4
+     wraps vision + audio encoder projections in `Gemma4ClippableLinear`
+     (`torch.clamp(x, -inf, +inf)` then `nn.Linear`); those paths are
+     dormant on text-only inputs. Targeting them produces
+     `grad_norm=0` and flat loss. Use a regex anchored on
+     `language_model.layers.\d+.(self_attn.(q|k|v|o)_proj|mlp.(gate|up|down)_proj)$`.
+  2. `model.enable_input_require_grads()` is required after
+     `get_peft_model()` — otherwise the embedding output has
+     `requires_grad=False` and gradients don't reach LoRA matrices.
+  3. Use `TrainingArguments(lr_scheduler_type="constant", warmup_steps=0)`
+     so `KairosPendulumLR` owns the LR (HF's built-in scheduler
+     would compete with the pendulum's modulation).
+
+**Validation (Gemma 4 E2B abliterated, RTX PRO 4000 Blackwell)**
+
+- 50 grad updates × batch=1 × grad_accum=8 × seq=1024 = 410k tokens
+  in 3:18 wall, VRAM peak 20.79 GB
+- LoRA: 12.08M trainable params (rank=8, target text decoder only)
+- Train loss: **5.09 → 1.37** (perplexity 162 → 4)
+- `grad_norm`: 7.33 → 0.58 (healthy convergence, was 0 with broken
+  targeting)
+- Generation post-SFT cleanly adopts the R1-distill "Step-by-step
+  thinking process" format with the markdown step list pattern
+  characteristic of OpenThoughts traces.
+
 ## 0.3.0 — 2026-05-15
 
 **New components**

@@ -14,7 +14,22 @@ from typing import Any
 from ..core import CallbackBundle
 
 
-class KairosHFCallback:
+def _trainer_callback_base():
+    """Return ``transformers.TrainerCallback`` if available, else ``object``.
+
+    We subclass the real ``TrainerCallback`` when transformers is
+    installed so HF's strict 5.x callback handler (which calls
+    ``getattr(callback, event)`` for every event including
+    ``on_init_end``) finds the no-op defaults it expects.
+    """
+    try:
+        from transformers import TrainerCallback
+        return TrainerCallback
+    except Exception:
+        return object
+
+
+class KairosHFCallback(_trainer_callback_base()):
     """HuggingFace TrainerCallback adapter.
 
     Parameters
@@ -41,6 +56,12 @@ class KairosHFCallback:
                 "KairosHFCallback needs transformers; "
                 "install with `pip install transformers`",
             ) from e
+        # If our base is TrainerCallback, call its __init__ to set up
+        # any state it tracks.
+        try:
+            super().__init__()
+        except TypeError:
+            pass
         self.bundle = bundle
         self.train_loss_key = train_loss_key
         self.eval_loss_key = eval_loss_key
