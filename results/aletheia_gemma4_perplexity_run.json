@@ -1,0 +1,91 @@
+{
+  "model_id": "huihui-ai/Huihui-gemma-4-E2B-it-abliterated",
+  "args": {
+    "max_steps": 100,
+    "batch_size": 1,
+    "grad_accum": 8,
+    "seq_len": 1024,
+    "lr": 5e-05,
+    "lora_r": 8,
+    "lora_alpha": 16,
+    "train_size_per_pool": 256,
+    "eval_size": 32,
+    "eval_every": 25,
+    "floor_mult": 0.8,
+    "save_dir": "/root/aletheia_gemma4_ckpt",
+    "seed": 0,
+    "dry_run_data": false
+  },
+  "baseline_scores": {
+    "reasoning": 0.005129601655946807,
+    "factuality": 0.00028260431193737577,
+    "instruction": 0.0015577594585626533
+  },
+  "baseline_losses": {
+    "reasoning": 5.2727272727272725,
+    "factuality": 8.17146282973621,
+    "instruction": 6.464506734619585
+  },
+  "final_scores": {
+    "reasoning": 0.23636149572857845,
+    "factuality": 0.33348168886259655,
+    "instruction": 0.2832004375390796
+  },
+  "final_losses": {
+    "reasoning": 1.442392884344882,
+    "factuality": 1.0981673210930767,
+    "instruction": 1.2616003721811402
+  },
+  "eval_history": [
+    {
+      "reasoning": 0.07151572778293416,
+      "reasoning_loss": 2.6378378844797203,
+      "factuality": 0.056367032255537866,
+      "factuality_loss": 2.8758708258612837,
+      "instruction": 0.08711788884154244,
+      "instruction_loss": 2.4404930334157147,
+      "step": 25,
+      "wall_s": 155.24
+    },
+    {
+      "reasoning": 0.1401828398002688,
+      "reasoning_loss": 1.9648077098738297,
+      "factuality": 0.2959549966219315,
+      "factuality_loss": 1.2175478746565125,
+      "instruction": 0.24481782854197945,
+      "instruction_loss": 1.4072409019845158,
+      "step": 50,
+      "wall_s": 280.45
+    },
+    {
+      "reasoning": 0.1912195364877072,
+      "reasoning_loss": 1.6543331053016939,
+      "factuality": 0.31732268054229285,
+      "factuality_loss": 1.1478361031420226,
+      "instruction": 0.27439978422010225,
+      "instruction_loss": 1.2931691695006058,
+      "step": 75,
+      "wall_s": 395.88
+    },
+    {
+      "reasoning": 0.23636149572857845,
+      "reasoning_loss": 1.442392884344882,
+      "factuality": 0.33348168886259655,
+      "factuality_loss": 1.0981673210930767,
+      "instruction": 0.2832004375390796,
+      "instruction_loss": 1.2616003721811402,
+      "step": 100,
+      "wall_s": 517.17
+    },
+    {
+      "reasoning": 0.23636149572857845,
+      "reasoning_loss": 1.442392884344882,
+      "factuality": 0.33348168886259655,
+      "factuality_loss": 1.0981673210930767,
+      "instruction": 0.2832004375390796,
+      "instruction_loss": 1.2616003721811402,
+      "step": 100,
+      "wall_s": 539.49
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+# Architecture growth beyond base parameter count.
+# ALL DISABLED BY DEFAULT. Aletheia core is pure LoRA fine-tuning
+# and merges back to base (42B prod, 8B dev).
+# Enable explicitly per-module when ready to expand.
+
+confidence_head:
+  enabled: false
+  # hidden_size inferred from model config at instantiation
+  dropout: 0.1
+  # Adds ~H params (e.g. 4097 on 4096-hidden), trained by calibration pool
+
+pool_side_ffn:
+  enabled: false
+  per_pool: true
+  intermediate_size: 2048          # keep modest; full 4096 -> ~300M total
+  gate_init: -4.0                  # sigmoid(-4) ~= 0.018 -> near-off at init
+  # Adds ~2*H*I per pool. 9 pools x 4096x2048 -> ~150M total
+
+expert_addition:
+  enabled: false
+  n_new_experts: 0
+  template_expert_idx: null        # null = average of existing experts
+  perturbation_std: 0.02
+  # Each new expert in Qwen3-42B-A3B ~= 250M params
+
+# Safety cap: refuse to launch if total growth > budget_fraction * base_params
+growth_budget_fraction: 0.05       # max 5% growth (~2B on 42B base)

@@ -1,0 +1,31 @@
+# Pendulum parameters for torsion cycling
+# Values chosen from jDHART v20 pareto2 results (Product=0.255 run)
+
+bronze:
+  amplitude: 0.4        # cos modulation depth in Phase A loss weighting
+  floor: 0.3            # weight clamp lower
+  ceil: 2.0             # weight clamp upper
+  # beta_3 = (3+sqrt(13))/2 ~= 3.3028 -> angle ~= 109 deg (in code, not config)
+
+torus:
+  weight_amplitude: 0.4  # T^2 loss-weight modulation
+  step_amplitude: 0.3    # T^2 sub-block step-count modulation
+  floor: 0.3
+  ceil: 2.0
+  base_steps: 100        # average sub-block length
+
+spectral_amp:
+  alpha_max: 5.0         # cap on adaptive amplification
+  eps: 1.0e-8
+
+# Default pool heads (each gets a golden-angle-spread phase offset)
+heads:
+  - factuality
+  - calibration
+  - abstention
+  - grounding
+  - consistency
+  - sycophancy
+  - reasoning
+  - instruction
+  - distillation

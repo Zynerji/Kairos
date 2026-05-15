@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.4.0 — 2026-05-15
+
+**Aletheia salvage — major subpackage added.**
+
+The Aletheia repo (post-training stack for ablated/uncensored LLMs)
+was retired on 2026-05-15. Its substantive contents have been
+imported into Kairos as the `kairos.aletheia` subpackage. Aletheia
+will not be developed further as a standalone codebase; all future
+work happens here.
+
+What was salvaged:
+
+- `kairos/aletheia/torsion/` — bronze pendulum, **torus T² pendulum**
+  (`(2π/φ², 2π/β₃)` quasiperiodic schedule), spectral amplification,
+  Phase A/B cycle controller. The bronze pendulum overlaps in spirit
+  with the existing `KairosPendulumLR` but the torus T² and Phase A/B
+  cycle are new capabilities Kairos didn't have.
+- `kairos/aletheia/ratchet/` — the original Aletheia Pareto ratchet
+  source that `KairosParetoGuard` was ported from. Kept in case the
+  original API is preferred for direct use.
+- `kairos/aletheia/pools/` — 9 named training pools (factuality,
+  calibration, abstention, grounding, consistency, sycophancy,
+  reasoning, instruction, distillation) on top of `CausalLMPool` /
+  `HFCausalLMPool` bases.
+- `kairos/aletheia/adapters/lora_per_pool.py` — multi-named-adapter
+  LoRA registration for Phase A per-pool cycling.
+- `kairos/aletheia/distill/` — refusal `teacher_filter` (regex +
+  classifier) and `rejection_sample` (re-roll on filter failure).
+- `kairos/aletheia/eval/` — `held_out` per-pool OOT gate and
+  `benchmarks` task-shape metric harness (the missing piece from
+  yesterday's perplexity-axis caveat).
+- `kairos/aletheia/growth/` — confidence-head / pool-side-FFN /
+  expert-addition stubs. Off by default.
+- `kairos/aletheia/phase_b.py` — combined Phase B loss.
+- `configs/aletheia/` — 5 original yaml configs (pendulums, ratchet,
+  growth, base_dev, base_prod).
+- `examples/aletheia/` — 4 original scripts (train_dev_8b,
+  train_prod_42b, baseline_eval, prepare_teacher_corpus).
+
+Plus 98 new tests under `tests/aletheia/`. Total: **170 tests
+passing** (was 72).
+
+**Fixed in salvage:** Aletheia's `tests/test_hf_helpers.py::
+test_partial_overlap` had a bug — the test used `"a b c"` as a pred,
+but `_normalize_text` strips articles (`a/an/the`), so the actual
+F1 is 0.8 (precision=1.0, recall=2/3), not 2/3. Test rewritten to
+use non-article tokens.
+
+The `examples/aletheia_gemma4_heal.py` scaffold from yesterday is
+still in `examples/` as the integration demo of `KairosParetoGuard`
++ `kairos.aletheia.pools` would slot in cleanly to replace its
+perplexity axes with task-shape metrics from
+`kairos.aletheia.eval.held_out`.
+
 ## 0.3.1 — 2026-05-15
 
 **HF Trainer integration — first real-model validation**

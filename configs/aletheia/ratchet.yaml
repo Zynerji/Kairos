@@ -1,0 +1,22 @@
+# Pareto ratchet configuration
+# Floor 0.80 proven correct at jDHART v20 (85% was too aggressive)
+
+floor: 0.80
+eps: 1.0e-3
+
+# Anchor values = pre-fine-tune OOT baseline of each pool
+# Must be populated from baseline eval of the chosen base model
+# before training begins. These placeholders are illustrative only.
+anchor:
+  factuality: 0.50
+  calibration: 0.40
+  abstention: 0.55
+  grounding: 0.45
+  consistency: 0.60
+  sycophancy: 0.55
+  reasoning: 0.50
+  instruction: 0.65
+  distillation: 0.40
+
+# Rollback policy: >= N axes below floor triggers checkpoint restore
+rollback_axes_threshold: 2

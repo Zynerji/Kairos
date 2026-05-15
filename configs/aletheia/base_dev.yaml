@@ -1,0 +1,63 @@
+# Dev target — single-GPU iteration cycle
+# Purpose: debug the torsion loop before spending on 42B runs
+
+model:
+  repo_id: mlabonne/Qwen3-8B-abliterated
+  revision: main
+  dtype: bfloat16
+  trust_remote_code: true
+
+architecture:
+  type: dense
+  hidden_size: 4096
+  num_layers: 36
+  num_heads: 32
+  # Qwen3-8B is dense — no MoE concerns
+
+adapters:
+  method: lora
+  rank: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+training:
+  phase_a:
+    lr: 1.0e-4
+    sub_block_steps: 100       # Bronze pendulum modulates this per head
+    pool_order:                # sequential, not simultaneous
+      - reasoning
+      - factuality
+      - calibration
+      - abstention
+      - grounding
+      - consistency
+      - sycophancy
+      - instruction
+      - distillation
+  phase_b:
+    lr: 1.0e-5                 # backbone lower
+    steps: 50
+    loss:
+      ranking_weight: 1.0
+      distill_ce_weight: 1.0
+      distill_kl_weight: 0.5
+      calibration_brier_weight: 0.3
+
+compute:
+  device: cuda:0
+  batch_size: 4
+  grad_accum: 8
+  precision: bf16
+  gradient_checkpointing: true
+
+paths:
+  output_dir: ./weights/dev-8b
+  checkpoints_keep: 5

@@ -1,0 +1,98 @@
+# Production target — DavidAU Qwen3-42B Thinking Abliterated
+
+model:
+  repo_id: DavidAU/Qwen3-42B-A3B-2507-Thinking-Abliterated-uncensored-TOTAL-RECALL-v2-Medium-MASTER-CODER
+  revision: main
+  dtype: bfloat16
+  trust_remote_code: true
+
+architecture:
+  type: moe
+  total_params_b: 42
+  active_params_b: 3           # A3B
+  num_experts: 128
+  experts_per_token: 8
+  num_layers: 67
+  context_length: 262144       # 256K
+  thinking: true               # has reasoning blocks
+
+adapters:
+  method: lora
+  rank: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj                # shared-expert only; routed experts frozen
+    - up_proj
+    - down_proj
+  # Routed experts frozen (too few tokens/batch for clean gradient)
+  # Spectral amp revives dead experts via adaptive alpha instead
+  expert_strategy:
+    route_frozen: true
+    shared_trainable: true
+    dead_expert_threshold: 0.001    # below this expert usage, spectral amp kicks in
+
+training:
+  phase_a:
+    lr: 5.0e-5
+    sub_block_steps: 100
+    pool_order:
+      - reasoning
+      - factuality
+      - calibration
+      - abstention
+      - grounding
+      - consistency
+      - sycophancy
+      - instruction
+      - distillation
+  phase_b:
+    lr: 5.0e-6
+    steps: 50
+    loss:
+      ranking_weight: 1.0
+      distill_ce_weight: 1.0
+      distill_kl_weight: 0.5
+      distill_think_kl_weight: 0.5   # KL on thinking-block logits
+      calibration_brier_weight: 0.3
+    unfreeze:
+      - router                 # critical for load balance repair
+      - shared_experts
+      - attention
+    keep_frozen:
+      - routed_experts         # 128 experts -> frozen
+
+compute:
+  fsdp: true
+  min_gpus: 4
+  recommended_gpus: 8
+  gpu_type: H100-80GB
+  batch_size: 1
+  grad_accum: 32
+  precision: bf16
+  gradient_checkpointing: true
+  cpu_offload: false
+
+teacher:
+  # For thinking-model distillation — MUST be a thinking teacher
+  source: deepseek-r1-distill      # primary
+  fallback: QwQ-32B                # same-family fallback
+  corpora:
+    - OpenThoughts-114k
+    - Bespoke-Stratos-17k
+    - s1K
+  refusal_filter:
+    regex_patterns_file: configs/refusal_patterns.txt
+    classifier: null                # to be trained
+  rejection_sample:
+    n_resamples: 3
+    agreement_threshold: 0.66
+
+paths:
+  output_dir: ./weights/prod-42b
+  checkpoints_keep: 10
+  pareto_best_path: ./weights/prod-42b/aletheia-pareto-best.pt

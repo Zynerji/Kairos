@@ -21,7 +21,13 @@ generalisation (via Grokking-Monitor + Cassandra) and acts on it:
                                   (qGPT-Infinity port; fixed silver-init NaN at K=8)
 
 Plus a one-line factory ``recommended_bundle("grokking"|"distillation"|
-"pareto_post_training"|"growth_search")``.
+"pareto_post_training"|"growth_search"|"pretraining")``.
+
+Submodule ``kairos.aletheia`` ships the salvaged Aletheia stack
+(torsion cycling, per-pool LoRA, 9 pool definitions, held-out eval
+with task-shape metrics, distillation teacher-filter, configs +
+scripts). Aletheia was archived in 2026-05-15; its contents are now
+exclusively maintained here.
 """
 
 from __future__ import annotations
@@ -61,8 +67,9 @@ from .pareto_guard import KairosParetoGuard, ParetoState
 from .growth_controller import KairosGrowthController, GrowthSignal
 from .antiresonant_init import KairosAntiResonantInit, AntiResonantReport
 from .bundles import recommended_bundle
+from . import aletheia  # noqa: F401 -- salvaged subpackage
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 __all__ = [
     "Action",

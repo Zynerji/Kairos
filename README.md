@@ -8,6 +8,26 @@ LLM-training repos. Built on
 [Grokking-Monitor](https://github.com/Zynerji/Grokking-Monitor) and
 [Cassandra](https://github.com/Zynerji/Cassandra).
 
+## v0.4 — Aletheia salvage
+
+The Aletheia post-training stack (torsion cycling, per-pool LoRA, 9
+pool definitions, held-out eval with task-shape metrics, distillation
+teacher-filter) was retired as a standalone project on 2026-05-15 and
+imported as `kairos.aletheia`. See the v0.4.0 entry in `CHANGELOG.md`
+for the full inventory.
+
+```python
+from kairos.aletheia.torsion import bronze, torus, spectral_amp, cycle
+from kairos.aletheia.adapters.lora_per_pool import register_pool_adapters
+from kairos.aletheia.pools import factuality, reasoning, instruction
+from kairos.aletheia.eval.held_out import HeldOutEval
+```
+
+The dev/prod targets carry over: `mlabonne/Qwen3-8B-abliterated` and
+the DavidAU Qwen3-42B-Thinking-Abliterated.
+`examples/aletheia/` holds the launch scripts, `configs/aletheia/` the
+yaml configs.
+
 ## v0.3 components (11) + one-line factory
 
 | # | Component | Source / status |
