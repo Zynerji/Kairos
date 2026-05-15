@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.5.0 — 2026-05-15
+
+**`kairos.aletheia.surgery` — refusal-direction abliteration + healing
+primitives.**
+
+Two complementary tools for working with refusal-direction abliteration
+(Arditi et al., "Refusal in Language Models Is Mediated by a Single
+Direction", 2024). Standard abliteration projects out a raw refusal
+direction `r` from every weight matrix that writes to the residual
+stream, which damages any capability that co-fires with refusal.
+This module gives you two ways to do it better:
+
+**Path A — `CapabilityAwareAbliterator`** (in-line at abliteration time)
+
+  - Compute the refusal direction `r` and a capability subspace `C`
+    via diff-of-means on harmful / harmless / per-axis-capability
+    prompts.
+  - Orthogonalise: `r_pure = r − C·(Cᵀ·r)`.
+  - Project `r_pure` (not `r`) out of every target weight matrix.
+
+  Result: refusal removed, capabilities correlated with the standard
+  refusal direction are preserved. Reports per-axis overlap so you
+  can tell which capabilities the standard recipe would have damaged.
+
+**Path B — `WeightDeltaCodebook`** (post-hoc on already-abliterated models)
+
+  - Given un-abliterated + abliterated state dict pair, build per-layer
+    `ΔW_ℓ = W_original_ℓ − W_abliterated_ℓ` (≈ rank-1 by construction).
+  - SVD-decompose. Split the rank-1 direction into capability-aligned
+    and capability-orthogonal components via the same `C` subspace.
+  - Selective re-injection at `α ∈ [0, 1]`:
+    `W_healed = W_abliterated + α · ΔW_capability`.
+  - α-sweep + per-axis OOT eval picks the Pareto-best operating point.
+
+**Primitives**
+
+  - `compute_direction_from_activations(harmful, harmless)` — diff-of-means
+  - `compute_capability_subspace(axes, neutral)` — orthonormal basis from
+    per-axis diff-of-means
+  - `project_out_subspace(direction, subspace)` — Gram-Schmidt remove
+
+**Examples**
+
+  - `examples/aletheia_capability_aware_abliterate.py` — full Path A
+    pipeline. Probes residual-stream activations on a 50-prompt corpus,
+    builds refusal + capability, runs the abliterator, saves codebook.
+  - `examples/aletheia_codebook_restore.py` — full Path B pipeline.
+    Loads un-abliterated + abliterated pair, builds the codebook,
+    α-sweeps with `kairos.aletheia.pools.*` evaluators.
+
+**Tests**
+
+  - `tests/aletheia/surgery/` — 28 tests for the math (math correctness
+    of refusal direction, capability subspace orthonormality, codebook
+    rank-1 recovery, alpha-zero/one identities, in-place mutation,
+    skip-substring filter, etc.).
+
+  Total now: **198 tests passing** (was 170).
+
+Note: the placeholder prompt corpora in the examples (`HARMFUL_PROMPTS`,
+`HARMLESS_PROMPTS`, `CAPABILITY_PROMPTS`) are illustrative — 8 prompts
+per class. Real probing for a publishable abliteration needs proper
+corpora (HarmBench / AdvBench for harmful, paired same-distribution
+harmless, 100+ per capability axis drawn from MMLU/GSM8K/TriviaQA). The
+math is correct at any corpus size; only the resulting direction
+quality varies.
+
 ## 0.4.0 — 2026-05-15
 
 **Aletheia salvage — major subpackage added.**

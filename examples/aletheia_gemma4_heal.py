@@ -1,240 +1,134 @@
 """Aletheia-style multi-axis Pareto LoRA heal for an abliterated LLM.
 
-What this is
-============
-A minimal but honest port of the Aletheia post-training protocol
-(see Aletheia/CLAUDE.md), scoped to a single LoRA adapter on the
-text decoder of a multimodal HF model. It does NOT yet implement
-per-pool LoRA + torsion cycling — that's Phase B and a separate
-scaffold. This is Phase A: prove the multi-axis Pareto loop drives
-SFT without regressing any axis below the 80% anchor floor.
+v2 (2026-05-15): swapped the ``exp(-loss)`` perplexity axes for real
+task-shape metrics via ``kairos.aletheia.pools.*``:
 
-Mechanism
-=========
-1. **Baseline eval** of the base abliterated model on held-out slices
-   of N pools. Each pool's metric = ``exp(-mean_loss)`` on the held-
-   out slice (higher = better, in (0, 1]).
-2. **Anchor**: pool baseline scores set the ParetoGuard anchors.
-3. **Mixed-batch SFT**: each training step samples uniformly from one
-   pool. LoRA adapters wrap only the text decoder (per Gemma 4
-   ``Gemma4ClippableLinear`` lesson from gemma4_lora_sft.py).
-4. **Periodic per-pool OOT eval** every ``--eval-every`` grad updates.
-   Each eval pass updates ``KairosParetoGuard`` with the latest per-
-   axis scores. The guard maintains the Pareto frontier (product
-   metric on the axes), saves a checkpoint on new bests, and emits a
-   ROLLBACK note when 2+ axes drop below the 80% floor.
-5. **Final eval + per-axis comparison table** vs baseline.
+    - ReasoningPool:    GSM8K train + GSM8K test eval, number-extract accuracy
+    - FactualityPool:   TriviaQA (`rc.nocontext`) train + held-out eval, F1
+    - InstructionPool:  Tulu-3 train + IFEval eval, F1 proxy
 
-Datasets (all public, refusal-filtered)
-=======================================
-- reasoning:   open-thoughts/OpenThoughts-114k (R1-distill thinking traces)
-- factuality:  trivia_qa (rc.nocontext)
-- instruction: tatsu-lab/alpaca
+The earlier ``exp(-loss)`` axes (v1) measured perplexity on held-out
+text that included our chat-template tokens — a metric the model
+trivially improves on just by absorbing the format, not by gaining
+capability. Now we use the same evaluation harness Aletheia was
+designed for: greedy generation, decode, score against gold via
+task-appropriate metrics.
 
-Three pools is enough to demonstrate the Pareto pattern. Adding
-calibration / abstention / etc. is a copy-and-extend.
-
-Usage on the VM
-===============
+Run on the VM
+=============
     PYTHONPATH=. python3 examples/aletheia_gemma4_heal.py \\
         --max-steps 100 --batch-size 1 --grad-accum 8 \\
-        --eval-every 25 --eval-size 32 --train-size-per-pool 256
+        --eval-every 25 --eval-samples 16 --train-size-per-pool 256
 
-Smoke locally (the model build will OOM on CPU; use --dry-run-data to
-just validate the dataset loaders + pool mixing logic).
+Per-eval cost
+=============
+Each periodic OOT eval generates ``eval_samples`` × max_new_tokens
+tokens per pool (3 pools, default 16 samples × ~128 tokens). On the
+Blackwell at ~50 tok/s for a 5B multimodal model that's roughly
+2-3 min per eval pass. Eval freq is the main scaling knob.
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import math
 import pathlib
-import random
 import sys
 import time
-from dataclasses import dataclass, field
 from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from kairos import (  # noqa: E402
-    Action, CallbackBundle, KairosCheckpoint, KairosParetoGuard,
-    KairosPendulumLR,
+    CallbackBundle, KairosCheckpoint, KairosParetoGuard, KairosPendulumLR,
 )
 from kairos.integrations.hf import KairosHFCallback  # noqa: E402
-
-from examples.finetune_deepseek_r1 import (  # noqa: E402
-    REFUSAL_REGEX, format_example,
-)
+from kairos.aletheia.pools.factuality import FactualityPool  # noqa: E402
+from kairos.aletheia.pools.reasoning import ReasoningPool  # noqa: E402
+from kairos.aletheia.pools.instruction import InstructionPool  # noqa: E402
 
 
 MODEL_ID = "huihui-ai/Huihui-gemma-4-E2B-it-abliterated"
 
 
 # ---------------------------------------------------------------------------
-# Pool definitions
+# Pool factory
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class Pool:
-    name: str
-    hf_id: str
-    hf_config: str | None = None
-    split: str = "train"
-    formatter: Any = None         # row dict -> string | None
-    train_idx: list[int] = field(default_factory=list)
-    eval_idx: list[int] = field(default_factory=list)
-
-
-def fmt_openthoughts(ex: dict) -> str | None:
-    return format_example(ex)  # already handles sharegpt conversations
-
-
-def fmt_trivia_qa(ex: dict) -> str | None:
-    q = ex.get("question")
-    a_obj = ex.get("answer") or {}
-    a = a_obj.get("value") if isinstance(a_obj, dict) else None
-    if not q or not a:
-        return None
-    text = (f"<start_of_turn>user\nAnswer concisely: {q}<end_of_turn>\n"
-            f"<start_of_turn>model\n{a}<end_of_turn>")
-    if REFUSAL_REGEX.search(text):
-        return None
-    return text
-
-
-def fmt_alpaca(ex: dict) -> str | None:
-    instr = ex.get("instruction")
-    inp = ex.get("input") or ""
-    out = ex.get("output")
-    if not instr or not out:
-        return None
-    user = instr + (f"\n\n{inp}" if inp else "")
-    text = (f"<start_of_turn>user\n{user}<end_of_turn>\n"
-            f"<start_of_turn>model\n{out}<end_of_turn>")
-    if REFUSAL_REGEX.search(text):
-        return None
-    return text
-
-
-POOLS: list[Pool] = [
-    Pool(name="reasoning",   hf_id="open-thoughts/OpenThoughts-114k",
-         formatter=fmt_openthoughts),
-    Pool(name="factuality",  hf_id="trivia_qa", hf_config="rc.nocontext",
-         formatter=fmt_trivia_qa),
-    Pool(name="instruction", hf_id="tatsu-lab/alpaca",
-         formatter=fmt_alpaca),
-]
+def build_pools(tokenizer, eval_samples: int) -> list:
+    """Build the 3 task-shape pools. The factuality pool's eval default
+    (`basicv8/SimpleQA`) is a community reupload that may vanish; fall
+    back to TriviaQA hash-split if the load fails."""
+    reasoning = ReasoningPool(
+        tokenizer=tokenizer,
+        eval_samples=eval_samples,
+        thinking_mode=False,           # base model doesn't know <think> tags
+        max_new_tokens=128,
+    )
+    factuality = FactualityPool(
+        tokenizer=tokenizer,
+        train_subset="rc.nocontext",    # smaller than rc.wikipedia.nocontext
+        eval_dataset_id="mandarjoshi/trivia_qa",
+        eval_subset="rc.nocontext",
+        eval_split="validation",        # held-out TriviaQA split
+        eval_samples=eval_samples,
+        max_new_tokens=32,
+    )
+    instruction = InstructionPool(
+        tokenizer=tokenizer,
+        train_dataset_id="tatsu-lab/alpaca",  # smaller than Tulu-3 for smoke
+        train_subset=None,
+        eval_dataset_id="tatsu-lab/alpaca",
+        eval_split="train",             # last N held out via hash, see below
+        eval_samples=eval_samples,
+        max_new_tokens=128,
+    )
+    return [reasoning, factuality, instruction]
 
 
 # ---------------------------------------------------------------------------
-# Dataset prep
+# Training data assembly
 # ---------------------------------------------------------------------------
 
 
-def collect_pool(pool: Pool, n_train: int, n_eval: int, seed: int) -> tuple[list[str], list[str]]:
-    """Stream `n_train + n_eval` formatted, refusal-filtered rows from
-    a pool. First `n_train` go to train, next `n_eval` to held-out."""
-    from datasets import load_dataset
+def build_mixed_dataset(pools: list, n_per_pool: int):
+    """Pull n_per_pool formatted examples from each pool's
+    `_format_example` (which returns prompt-target pairs), tokenize
+    with proper prompt-token masking (-100 on prompt positions), and
+    concatenate into a single shuffled HF Dataset.
 
-    print(f"[{pool.name}] streaming {n_train + n_eval} rows from "
-          f"{pool.hf_id}...", flush=True)
-    kwargs = dict(split=pool.split, streaming=True)
-    if pool.hf_config is not None:
-        kwargs["name"] = pool.hf_config
-    ds = load_dataset(pool.hf_id, **kwargs)
-
-    rng = random.Random(seed)
-    rows: list[str] = []
-    dropped_refusal = 0
-    dropped_empty = 0
-    # We don't shuffle a streaming dataset; just take the prefix.
-    for ex in ds:
-        text = pool.formatter(ex)
-        if text is None:
-            if REFUSAL_REGEX.search(json.dumps(ex)):
-                dropped_refusal += 1
-            else:
-                dropped_empty += 1
-            continue
-        rows.append(text)
-        if len(rows) >= n_train + n_eval:
-            break
-    rng.shuffle(rows)
-    print(f"  kept={len(rows)}  refusal_dropped={dropped_refusal}  "
-          f"empty_dropped={dropped_empty}", flush=True)
-    return rows[:n_train], rows[n_train:n_train + n_eval]
-
-
-# ---------------------------------------------------------------------------
-# Per-pool eval
-# ---------------------------------------------------------------------------
-
-
-def pool_score(model, tokenizer, eval_texts: list[str], seq_len: int,
-                device: str) -> tuple[float, float]:
-    """Held-out next-token cross-entropy on the pool's eval slice.
-
-    Returns ``(score, mean_loss)`` where score = ``exp(-mean_loss)`` so
-    higher = better and the value is in (0, 1]. ParetoGuard wants
-    "higher better" axes.
+    The pool's _format_example + _tokenize_pair give us label-masked
+    labels that train only on the *target* tokens — significantly
+    better signal than training on the entire concatenated string.
     """
-    import torch
-    model.eval()
-    total_loss = 0.0
-    total_count = 0
-    for text in eval_texts:
-        ids = tokenizer(text, return_tensors="pt", truncation=True,
-                         max_length=seq_len).input_ids.to(device)
-        if ids.shape[1] < 2:
-            continue
-        with torch.no_grad():
-            out = model(ids)
-        shift_logits = out.logits[..., :-1, :].contiguous()
-        shift_labels = ids[..., 1:].contiguous()
-        loss = torch.nn.functional.cross_entropy(
-            shift_logits.view(-1, shift_logits.size(-1)),
-            shift_labels.view(-1), reduction="sum",
-        )
-        n_tok = shift_labels.numel()
-        total_loss += float(loss.item())
-        total_count += n_tok
-    mean_loss = total_loss / max(total_count, 1)
-    score = math.exp(-min(mean_loss, 20))   # clamp for stability
-    return score, mean_loss
-
-
-# ---------------------------------------------------------------------------
-# Trainer integration — multi-pool dataset
-# ---------------------------------------------------------------------------
-
-
-def build_mixed_dataset(pools: list[Pool], tokenizer, seq_len: int):
-    """Build a single HF Dataset by concatenating each pool's train
-    set and tagging rows with the pool name. The Trainer samples
-    uniformly across pools because we shuffle the concatenation."""
     from datasets import Dataset
 
-    all_texts: list[str] = []
-    all_pools: list[str] = []
-    train_rows_by_pool: dict[str, list[str]] = {p.name: [] for p in pools}
-    for p, (train, _eval) in zip(pools, pools_data):  # noqa: F821
-        all_texts.extend(train)
-        all_pools.extend([p.name] * len(train))
-        train_rows_by_pool[p.name] = train
+    rows: list[dict] = []
+    for p in pools:
+        ds = p._load_hf(p.train_dataset_id, p.train_subset, p.train_split)
+        taken = 0
+        for ex in ds:
+            try:
+                prompt, target = p._format_example(ex)
+            except Exception:
+                continue
+            if not prompt or not target:
+                continue
+            tok = p._tokenize_pair(prompt, target)
+            tok["pool"] = p.name
+            rows.append(tok)
+            taken += 1
+            if taken >= n_per_pool:
+                break
+        print(f"  [{p.name}] kept {taken} train rows", flush=True)
 
-    def tokenize(batch):
-        out = tokenizer(batch["text"], truncation=True, max_length=seq_len,
-                          padding="max_length", return_tensors=None)
-        out["labels"] = [list(ids) for ids in out["input_ids"]]
-        return out
-
-    ds = Dataset.from_dict({"text": all_texts, "pool": all_pools})
+    # Build pure-Python lists (HF Dataset.from_list copies)
+    ds = Dataset.from_list(rows)
     ds = ds.shuffle(seed=0)
-    ds = ds.map(tokenize, batched=True, remove_columns=["text", "pool"])
+    # Strip the pool tag — collator doesn't need it
+    ds = ds.remove_columns(["pool"])
     return ds
 
 
@@ -253,17 +147,14 @@ def main() -> int:
     parser.add_argument("--lora-r", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--train-size-per-pool", type=int, default=256)
-    parser.add_argument("--eval-size", type=int, default=32)
-    parser.add_argument("--eval-every", type=int, default=25,
-                          help="grad updates between OOT evals")
-    parser.add_argument("--floor-mult", type=float, default=0.80,
-                          help="Pareto floor: per-axis score must stay "
-                          ">= floor_mult * baseline_anchor")
+    parser.add_argument("--eval-samples", type=int, default=16,
+                          help="OOT examples per pool (generation-based)")
+    parser.add_argument("--eval-every", type=int, default=25)
+    parser.add_argument("--floor-mult", type=float, default=0.80)
     parser.add_argument("--save-dir", type=str,
-                          default="./aletheia_gemma4_ckpt")
+                          default="./aletheia_gemma4_v2_ckpt")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--dry-run-data", action="store_true",
-                          help="just verify pool loaders, skip model + train")
+    parser.add_argument("--dry-run-data", action="store_true")
     args = parser.parse_args()
 
     import torch
@@ -272,36 +163,34 @@ def main() -> int:
     save_dir = pathlib.Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Pool data ---
-    global pools_data
-    pools_data = []
-    for p in POOLS:
-        train, ev = collect_pool(p, args.train_size_per_pool,
-                                    args.eval_size, args.seed)
-        pools_data.append((train, ev))
-        p.train_idx = list(range(len(train)))
-        p.eval_idx = list(range(len(ev)))
-
-    if args.dry_run_data:
-        print("\n[dry-run-data] sample rows per pool:")
-        for p, (train, ev) in zip(POOLS, pools_data):
-            print(f"  {p.name}: train={len(train)} eval={len(ev)}")
-            print(f"    head: {train[0][:120]!r}")
-        return 0
-
-    import bitsandbytes.optim as bnbo
     from transformers import (
         AutoModelForCausalLM, AutoTokenizer,
-        Trainer, TrainingArguments, DataCollatorForLanguageModeling,
+        Trainer, TrainingArguments,
     )
-    from peft import LoraConfig, get_peft_model, TaskType
 
-    # --- Model ---
-    print(f"\nloading {MODEL_ID} ...", flush=True)
-    t0 = time.time()
+    print(f"loading tokenizer for {MODEL_ID} ...", flush=True)
     tok = AutoTokenizer.from_pretrained(MODEL_ID)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+
+    pools = build_pools(tok, args.eval_samples)
+    print(f"pools: {[p.name for p in pools]}", flush=True)
+
+    print("\nbuilding mixed training set...", flush=True)
+    train_ds = build_mixed_dataset(pools, args.train_size_per_pool)
+    print(f"  mixed dataset size: {len(train_ds)}", flush=True)
+
+    if args.dry_run_data:
+        print("\n[dry-run-data] sample row tokens:")
+        for i in range(min(3, len(train_ds))):
+            row = train_ds[i]
+            n_unmasked = sum(1 for x in row["labels"] if x != -100)
+            print(f"  row {i}: input_ids len={len(row['input_ids'])} "
+                  f"target_tokens={n_unmasked}")
+        return 0
+
+    print(f"\nloading {MODEL_ID} weights ...", flush=True)
+    t0 = time.time()
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID, dtype=torch.bfloat16, device_map="cuda",
         trust_remote_code=True,
@@ -309,18 +198,22 @@ def main() -> int:
     print(f"  base loaded in {time.time()-t0:.1f}s, "
           f"VRAM={torch.cuda.memory_allocated()/1e9:.2f} GB", flush=True)
 
-    # --- Baseline eval (anchors) ---
-    print("\nbaseline eval (per-pool OOT)...", flush=True)
+    # --- Baseline eval (task-shape metrics) ---
+    print("\nbaseline eval (per-pool OOT, generation-based)...", flush=True)
     baseline_scores: dict[str, float] = {}
-    baseline_losses: dict[str, float] = {}
-    for p, (_, ev) in zip(POOLS, pools_data):
-        score, mean_loss = pool_score(model, tok, ev, args.seq_len, "cuda")
-        baseline_scores[p.name] = score
-        baseline_losses[p.name] = mean_loss
-        print(f"  {p.name:>12s}: score={score:.4f}  loss={mean_loss:.4f}",
+    for p in pools:
+        t_eval = time.time()
+        res = p.evaluate(model, batch_size=1)
+        baseline_scores[p.name] = res.score
+        print(f"  {p.name:>12s}: score={res.score:.4f}  "
+              f"n={res.n_examples}  wall={time.time()-t_eval:.1f}s",
               flush=True)
 
-    # --- LoRA wrap (text decoder only — see gemma4_lora_sft.py for why) ---
+    # --- LoRA wrap (text decoder only) ---
+    import bitsandbytes.optim as bnbo
+    from peft import LoraConfig, get_peft_model, TaskType
+    from transformers import DataCollatorForSeq2Seq
+
     peft_cfg = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
@@ -337,13 +230,9 @@ def main() -> int:
         model.enable_input_require_grads()
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     n_total = sum(p.numel() for p in model.parameters())
-    print(f"  LoRA: trainable={n_trainable/1e6:.2f}M  "
+    print(f"\n  LoRA: trainable={n_trainable/1e6:.2f}M  "
           f"total={n_total/1e9:.3f}B  "
           f"trainable_pct={100*n_trainable/n_total:.3f}%", flush=True)
-
-    # --- Training data ---
-    ds = build_mixed_dataset(POOLS, tok, args.seq_len)
-    print(f"  mixed dataset size: {len(ds)}", flush=True)
 
     # --- Optimiser ---
     opt = bnbo.AdamW8bit(
@@ -351,10 +240,9 @@ def main() -> int:
         lr=args.lr, betas=(0.9, 0.95), weight_decay=0.0,
     )
 
-    # --- Kairos bundle: ParetoGuard with baseline anchors + Pendulum ---
+    # --- Kairos bundle ---
     pareto = KairosParetoGuard(
-        anchor=baseline_scores,
-        metric_prefix="pool_",
+        anchor=baseline_scores, metric_prefix="pool_",
         floor_mult=args.floor_mult,
     )
     pendulum = KairosPendulumLR.for_distillation(optimizer=opt,
@@ -363,7 +251,7 @@ def main() -> int:
     bundle = CallbackBundle(pareto, pendulum, ckpt)
     pendulum.set_initial_lrs(args.lr)
 
-    # Periodic OOT eval bound to KairosHFCallback via a custom TrainerCallback
+    # --- Periodic eval (generation-based) ---
     from transformers import TrainerCallback
 
     class _PeriodicEval(TrainerCallback):
@@ -376,39 +264,32 @@ def main() -> int:
 
         def on_log(self, args_, state, control, logs=None, **kwargs):
             logs = logs or {}
-            # Every eval_every grad updates, run per-pool eval and feed
-            # to the bundle (pareto + pendulum + checkpoint).
             if (self._step > 0 and self._step % args.eval_every == 0
                     and "_evaled_at" not in logs):
                 model.eval()
-                row: dict[str, float] = {}
+                row: dict[str, Any] = {"step": self._step}
                 axis_keys: dict[str, float] = {}
-                for p, (_, ev) in zip(POOLS, pools_data):
-                    s, l = pool_score(model, tok, ev, args.seq_len, "cuda")
-                    row[p.name] = s
-                    row[f"{p.name}_loss"] = l
-                    axis_keys[f"pool_{p.name}"] = s
-                row["step"] = self._step
-                row["wall_s"] = round(time.time() - t0, 2)
+                eval_t0 = time.time()
+                for p in pools:
+                    res = p.evaluate(model, batch_size=1)
+                    row[p.name] = res.score
+                    axis_keys[f"pool_{p.name}"] = res.score
+                row["eval_wall_s"] = round(time.time() - eval_t0, 1)
+                row["wall_s"] = round(time.time() - t0, 1)
                 self.history.append(row)
-                # Print compact summary
-                summary = "  ".join(f"{k}={v:.4f}" for k, v in row.items()
-                                       if k not in ("step", "wall_s")
-                                       and not k.endswith("_loss"))
-                print(f"[eval @ step {self._step}]  {summary}", flush=True)
-                # Feed to Kairos bundle (with the latest train_loss)
+                summary = "  ".join(f"{p.name}={row[p.name]:.4f}" for p in pools)
+                print(f"[eval @ step {self._step}]  {summary}  "
+                      f"({row['eval_wall_s']}s)", flush=True)
+
                 axis_keys["train_loss"] = float(logs.get("loss", 0.0))
                 axis_keys["train_acc"] = 0.0
-                axis_keys["test_loss"] = float(
-                    sum(row[f"{p.name}_loss"] for p in POOLS) / len(POOLS)
-                )
+                axis_keys["test_loss"] = 0.0
                 axis_keys["test_acc"] = float(
-                    sum(row[p.name] for p in POOLS) / len(POOLS)
+                    sum(row[p.name] for p in pools) / len(pools)
                 )
                 action = bundle.observe(self._step, **axis_keys)
                 for note in action.notes:
                     print(f"  pareto: {note}", flush=True)
-                # Persist row
                 with open(save_dir / "eval_history.jsonl", "a",
                             encoding="utf-8") as fh:
                     fh.write(json.dumps(row) + "\n")
@@ -436,14 +317,18 @@ def main() -> int:
     trainer = Trainer(
         model=model,
         args=targs,
-        train_dataset=ds,
-        data_collator=DataCollatorForLanguageModeling(tokenizer=tok, mlm=False),
+        train_dataset=train_ds,
+        data_collator=DataCollatorForSeq2Seq(tok, padding=True,
+                                                pad_to_multiple_of=8,
+                                                return_tensors="pt",
+                                                label_pad_token_id=-100),
         callbacks=[KairosHFCallback(bundle), periodic_eval],
         optimizers=(opt, None),
     )
 
     torch.cuda.reset_peak_memory_stats()
-    print("\nstarting LoRA SFT (multi-axis Pareto)...", flush=True)
+    print("\nstarting LoRA SFT (multi-axis Pareto, task-shape metrics)...",
+          flush=True)
     trainer.train()
     print(f"done. VRAM peak: {torch.cuda.max_memory_allocated()/1e9:.2f} GB",
           flush=True)
@@ -451,41 +336,38 @@ def main() -> int:
     # --- Final eval ---
     print("\nfinal eval (per-pool OOT)...", flush=True)
     final_scores: dict[str, float] = {}
-    final_losses: dict[str, float] = {}
-    for p, (_, ev) in zip(POOLS, pools_data):
-        score, mean_loss = pool_score(model, tok, ev, args.seq_len, "cuda")
-        final_scores[p.name] = score
-        final_losses[p.name] = mean_loss
+    for p in pools:
+        res = p.evaluate(model, batch_size=1)
+        final_scores[p.name] = res.score
 
-    # --- Comparison table ---
     print()
-    print("=" * 68)
+    print("=" * 72)
     print(f"{'pool':<14}{'baseline':>12}{'final':>12}{'Δ score':>14}"
           f"{'Δ%':>10}{'verdict':>10}")
-    print("-" * 68)
-    for p in POOLS:
+    print("-" * 72)
+    for p in pools:
         b = baseline_scores[p.name]
         f = final_scores[p.name]
         d = f - b
-        pct = 100 * d / b if b > 0 else 0
+        pct = 100 * d / b if b > 1e-6 else float("inf") if d > 0 else 0
         verdict = "↑" if d > 0 else "↓" if d < 0 else "="
         if f < args.floor_mult * b:
             verdict = "↓ FLOOR"
-        print(f"{p.name:<14}{b:>12.4f}{f:>12.4f}{d:>+14.4f}{pct:>+9.2f}%"
+        pct_str = f"{pct:+.2f}%" if math.isfinite(pct) else "from zero"
+        print(f"{p.name:<14}{b:>12.4f}{f:>12.4f}{d:>+14.4f}{pct_str:>10}"
               f"{verdict:>10}")
-    print("=" * 68)
+    print("=" * 72)
+    prod_base = math.prod(max(v, 1e-6) for v in baseline_scores.values())
+    prod_final = math.prod(max(v, 1e-6) for v in final_scores.values())
     print(f"floor_mult={args.floor_mult}, "
-          f"product baseline={math.prod(baseline_scores.values()):.6f}, "
-          f"product final={math.prod(final_scores.values()):.6f}")
+          f"product baseline={prod_base:.6f}, "
+          f"product final={prod_final:.6f}")
 
-    # --- Persist final report ---
     report = {
         "model_id": MODEL_ID,
         "args": vars(args),
         "baseline_scores": baseline_scores,
-        "baseline_losses": baseline_losses,
         "final_scores": final_scores,
-        "final_losses": final_losses,
         "eval_history": periodic_eval.history,
     }
     (save_dir / "report.json").write_text(json.dumps(report, indent=2))

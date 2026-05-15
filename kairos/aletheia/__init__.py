@@ -25,6 +25,14 @@ What this gives you on top of plain Kairos:
                      **STUBS** (off by default; do NOT enable without
                      explicit growth plan)
   * `phase_b.py`   — combined Phase B loss (distill_ce + distill_kl + Brier)
+  * `surgery/`     — refusal-direction abliteration + healing primitives
+                     (new in v0.5.0): ``CapabilityAwareAbliterator`` for
+                     in-line capability-orthogonalised abliteration,
+                     ``WeightDeltaCodebook`` for A/B post-hoc codebook
+                     restoration of already-abliterated checkpoints,
+                     ``compute_direction_from_activations`` /
+                     ``compute_capability_subspace`` /
+                     ``project_out_subspace`` as the underlying primitives.
 
 The Aletheia targets carry over: dev = `mlabonne/Qwen3-8B-abliterated`,
 prod = the DavidAU Qwen3-42B abliterated thinker. `examples/aletheia/`
@@ -33,4 +41,4 @@ holds the original scripts (`train_dev_8b.py`, `train_prod_42b.py`,
 holds the original 5 yaml configs.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
