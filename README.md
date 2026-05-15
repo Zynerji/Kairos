@@ -8,7 +8,7 @@ LLM-training repos. Built on
 [Grokking-Monitor](https://github.com/Zynerji/Grokking-Monitor) and
 [Cassandra](https://github.com/Zynerji/Cassandra).
 
-## v0.2 components (10)
+## v0.3 components (11) + one-line factory
 
 | # | Component | Source / status |
 |---|---|---|
@@ -19,9 +19,22 @@ LLM-training repos. Built on
 | 5 | `KairosAccelerator`         | 🔬 research — weight-noise pulses during plateau |
 | 6 | `KairosCurriculum`          | 🔬 research — phase-aware lr/wd with hysteresis + ratchet |
 | 7 | `KairosProbe`               | 🔬 research — generic capability-emergence probe |
-| 8 | **`KairosPendulumLR`**      | ✅ ported from Kanon (Alembic DHART v14.2: 15/15 crystal detection, ~5 % over cosine in late-phase distillation) |
+| 8 | **`KairosPendulumLR`**      | ✅ ported from Kanon — 5-seed: wins 4/5 (+0.24 mean, +0.62 best) on modular-arithmetic grok (RTX PRO 4000) |
 | 9 | **`KairosParetoGuard`**     | ✅ ported from Aletheia (Qwen3 9-axis post-training, dual-regression rollback) |
-| 10 | **`KairosGrowthController`** | ✅ ported from qGPT-Infinity (proven: K=8 → 64 auto-grown, 6 successful events) |
+| 10 | **`KairosGrowthController`** | ✅ ported from qGPT-Infinity (K=8 → 64 auto-grown, 6 successful events) |
+| 11 | **`KairosAntiResonantInit`** | ✅ ported from qGPT-Infinity — orthogonal init avoiding teacher harmonics (fixed silver-init NaN at K=8 distill) |
+
+### One-line factory
+
+```python
+from kairos import recommended_bundle
+
+bundle = recommended_bundle("grokking", optimizer=opt,
+                             max_steps=15000,
+                             checkpoint_dir="./ckpt")
+# Profiles: "grokking" | "distillation" | "pareto_post_training"
+#           | "growth_search" | "pretraining"
+```
 
 ## The 3 new mechanisms
 
@@ -105,32 +118,38 @@ for n in action.notes:
 
 ## Headline empirical results (RTX PRO 4000 Blackwell, `(a+b) mod 29` Transformer)
 
-### KairosPendulumLR.for_grokking() — **+62 pp test accuracy**
+### KairosPendulumLR.for_grokking() — **5-seed paired study**
 
-`AdamW(lr=1e-3, wd=1.0)`, 2-layer Transformer (~540 k params), 15 000 steps, same seed:
+`AdamW(lr=1e-3, wd=1.0)`, 2-layer Transformer (~540 k params), 15 000
+steps, 5 seeds (0-4), same data split per seed across BASELINE_STATIC
+and KAIROS_PENDULUM (`for_grokking()`):
 
-| config | wall | final train_acc | final test_acc |
+| config | mean final test_acc | std | per-seed |
 |---|---|---|---|
-| BASELINE_STATIC | 248.1 s | 1.000 | **0.365** |
-| KAIROS_PENDULUM (`for_grokking()`) | 252.1 s | 1.000 | **0.988** ✓ |
+| BASELINE_STATIC                       | 0.574 | 0.330 | 0.365 / 0.399 / 0.864 / 0.990 / 0.251 |
+| KAIROS_PENDULUM (`for_grokking()`)    | **0.812** | 0.294 | 0.988 / 0.766 / 1.000 / 0.990 / 0.316 |
 
-**+0.623 absolute test accuracy.** The pendulum essentially *completed
-the grok* that static-LR could not.
+**Paired delta (PENDULUM − BASELINE):** mean **+0.238 ± 0.256**,
+pendulum > baseline at **4 / 5 seeds** (delta > +0.05). Per-seed:
+`[+0.623, +0.367, +0.136, +0.000, +0.065]`.
 
-Phase distribution over 15 000 steps:
-* CRYSTAL: 44 % (lr_mult ≈ 0.382 — fine-tune)
-* ACTIVE:  19 % (lr_mult = 1.0)
-* EXPLORE: **37 %** (lr_mult ≈ 1.618 — escape the stuck state)
+Interpretation by regime:
 
-The Hamiltonian-pendulum CV signal on `test_loss` correctly diagnoses
-the slow-grok plateau as "stuck", boosts LR by 1.618×, and lets the
-optimizer break out. Reproduce: `python examples/pendulum_lr_demo.py`.
+* **Baseline gets stuck (seeds 0, 1):** pendulum escapes the
+  memorisation plateau and groks. Single-seed headline: +0.623 / +0.367.
+* **Baseline groks within 15 k steps (seeds 2, 3):** pendulum matches
+  it (0.990–1.000). No regression from adding the pendulum.
+* **Neither config groks in 15 k steps (seed 4):** pendulum still
+  ahead (0.316 vs 0.251) — both need more steps.
+
+The Hamiltonian-pendulum CV signal on `test_loss` diagnoses the slow-grok
+plateau as "stuck", boosts LR by φ ≈ 1.618×, and lets the optimizer
+break out. Reproduce: `python examples/multi_seed_validation.py`.
 
 > Calibration note: `train_loss` flatlines at ~0 after memorisation in
 > grokking-shaped tasks, so the original Kanon-default `train_loss`
-> pendulum metric over-throttles (CRYSTAL 87 % of steps, test_acc
-> -0.109 vs baseline). For grokking, drive the pendulum from
-> `test_loss` — that's what `for_grokking()` does.
+> pendulum metric over-throttles. For grokking, drive the pendulum
+> from `test_loss` — that's what `for_grokking()` does.
 
 ### EarlyStop saves real compute on dead-end runs
 
@@ -164,12 +183,22 @@ from kairos.integrations import KairosLightningCallback  # Lightning
 
 ```bash
 pip install -e .
-python -m pytest tests/ -q                         # 44 tests
+python -m pytest tests/ -q                         # 72 tests
 python examples/early_stop_demo.py                 # validated win
 python examples/train_with_kairos.py --mode all    # 3-way head-to-head
 python examples/pendulum_lr_demo.py                # PendulumLR A/B
+python examples/multi_seed_validation.py           # 5-seed GPU robustness
 python examples/sweep_demo.py                      # SweepGate
+python examples/train_mamba_1b.py --smoke          # 0.74B Mamba scaffold (smoke)
+python examples/finetune_deepseek_r1.py --smoke    # DeepSeek-R1 SFT scaffold (smoke)
+# Real launches on Blackwell:
+bash   examples/launch_mamba_pretraining.sh                # 0.74B Mamba, fp32 Adam
+CONFIG=1p4b bash examples/launch_mamba_pretraining.sh      # 1.37B Mamba, 8-bit Adam
 ```
+
+See `results/SUMMARY.md` for the headline runs (5-seed multi-seed
+validation, 0.74B pretrain → DeepSeek SFT, +0.74B/+1.37B VRAM
+benchmarks).
 
 ## License
 

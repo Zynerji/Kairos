@@ -156,6 +156,22 @@ class KairosPendulumLR(BaseCallback):
                 float(g["lr"]) for g in self.optimizer.param_groups
             ]
 
+    def set_initial_lrs(self, lrs: list[float] | float) -> None:
+        """Override the captured initial LRs. Use this when the
+        pendulum should anchor to a post-warmup target LR rather than
+        the LR present at first observe (which may be mid-warmup)."""
+        if self.optimizer is None:
+            return
+        if isinstance(lrs, (int, float)):
+            self._initial_lrs = [float(lrs)] * len(self.optimizer.param_groups)
+        else:
+            if len(lrs) != len(self.optimizer.param_groups):
+                raise ValueError(
+                    f"len(lrs)={len(lrs)} != "
+                    f"#param_groups={len(self.optimizer.param_groups)}"
+                )
+            self._initial_lrs = [float(x) for x in lrs]
+
     def _apply(self, mult: float) -> None:
         if self.optimizer is None or self._initial_lrs is None:
             return

@@ -116,6 +116,45 @@ def test_pendulum_lr_for_distillation_preset():
     assert p.metric == "train_loss"
 
 
+def test_pendulum_lr_set_initial_lrs_scalar():
+    """Allows training loop to re-anchor the pendulum after warmup."""
+    opt = _FakeOptimizer(lr=1e-6)  # mid-warmup
+    p = KairosPendulumLR(optimizer=opt, apply_smoothing=0.0)
+    bundle = CallbackBundle(p)
+    bundle.observe(0, train_loss=0.5, train_acc=0.5,
+                    test_loss=0.5, test_acc=0.3)
+    # Pendulum captured 1e-6 as its anchor.
+    # Re-anchor to the post-warmup target.
+    p.set_initial_lrs(3e-4)
+    bundle.observe(1, train_loss=0.5, train_acc=0.5,
+                    test_loss=0.5, test_acc=0.3)
+    # LR should now be ~ 3e-4 * mult (NOT 1e-6 * mult).
+    assert opt.param_groups[0]["lr"] >= 1e-5, (
+        f"after re-anchor lr={opt.param_groups[0]['lr']}, expected >= 1e-5"
+    )
+
+
+def test_pendulum_lr_set_initial_lrs_list():
+    opt = _FakeOptimizer(lr=1e-6, n=3)
+    p = KairosPendulumLR(optimizer=opt, apply_smoothing=0.0)
+    bundle = CallbackBundle(p)
+    bundle.observe(0, train_loss=0.5, train_acc=0.5,
+                    test_loss=0.5, test_acc=0.3)
+    p.set_initial_lrs([1e-4, 2e-4, 3e-4])
+    bundle.observe(1, train_loss=0.5, train_acc=0.5,
+                    test_loss=0.5, test_acc=0.3)
+    # All groups should reflect their respective anchors.
+    lrs = [g["lr"] for g in opt.param_groups]
+    assert lrs[0] < lrs[1] < lrs[2], lrs
+
+
+def test_pendulum_lr_set_initial_lrs_wrong_len_raises():
+    opt = _FakeOptimizer(lr=1e-6, n=2)
+    p = KairosPendulumLR(optimizer=opt, apply_smoothing=0.0)
+    with pytest.raises(ValueError):
+        p.set_initial_lrs([1e-4, 2e-4, 3e-4])  # 3 ≠ 2
+
+
 # ---------------------------------------------------------------------------
 # KairosParetoGuard
 # ---------------------------------------------------------------------------

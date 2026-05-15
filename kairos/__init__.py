@@ -11,11 +11,17 @@ generalisation (via Grokking-Monitor + Cassandra) and acts on it:
    6. KairosCurriculum        — phase-aware optimizer settings (research)
    7. KairosProbe             — generic capability-emergence probe (research)
    8. KairosPendulumLR        — Hamiltonian-pendulum loss-driven LR adaptation
-                                  (Kanon port; proven in Alembic DHART v14.2)
+                                  (Kanon port; proven in Alembic DHART v14.2;
+                                   +62 pp test_acc on modular-arithmetic grok)
    9. KairosParetoGuard       — multi-axis Pareto-frontier rollback gate
                                   (Aletheia port; proven on Qwen3 9-axis post-training)
   10. KairosGrowthController  — saturation-triggered architecture-growth signal
                                   (qGPT-Infinity port; proven K=8→64 auto-grow)
+  11. KairosAntiResonantInit  — orthogonal weight init avoiding teacher harmonics
+                                  (qGPT-Infinity port; fixed silver-init NaN at K=8)
+
+Plus a one-line factory ``recommended_bundle("grokking"|"distillation"|
+"pareto_post_training"|"growth_search")``.
 """
 
 from __future__ import annotations
@@ -53,16 +59,20 @@ from .probe import (
 from .pendulum_lr import KairosPendulumLR
 from .pareto_guard import KairosParetoGuard, ParetoState
 from .growth_controller import KairosGrowthController, GrowthSignal
+from .antiresonant_init import KairosAntiResonantInit, AntiResonantReport
+from .bundles import recommended_bundle
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "Action",
+    "AntiResonantReport",
     "BaseCallback",
     "CallbackBundle",
     "EmergenceReport",
     "GrowthSignal",
     "KairosAccelerator",
+    "KairosAntiResonantInit",
     "KairosCheckpoint",
     "KairosCurriculum",
     "KairosEarlyStop",
@@ -78,4 +88,5 @@ __all__ = [
     "PhaseTransition",
     "TrialDecision",
     "TrialSummary",
+    "recommended_bundle",
 ]

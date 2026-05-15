@@ -1,0 +1,95 @@
+{
+  "n_seeds": 5,
+  "n_steps": 15000,
+  "rows": [
+    {
+      "seed": 0,
+      "use_pendulum": false,
+      "wall_seconds": 153.86244440078735,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.36502546072006226,
+      "best_test_acc_anywhere": 0.40407469868659973
+    },
+    {
+      "seed": 0,
+      "use_pendulum": true,
+      "wall_seconds": 165.96150875091553,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.9881154894828796,
+      "best_test_acc_anywhere": 1.0
+    },
+    {
+      "seed": 1,
+      "use_pendulum": false,
+      "wall_seconds": 258.3002848625183,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.39898133277893066,
+      "best_test_acc_anywhere": 0.42954161763191223
+    },
+    {
+      "seed": 1,
+      "use_pendulum": true,
+      "wall_seconds": 211.46296405792236,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.7657045722007751,
+      "best_test_acc_anywhere": 0.7911714911460876
+    },
+    {
+      "seed": 2,
+      "use_pendulum": false,
+      "wall_seconds": 197.99185991287231,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.8641765713691711,
+      "best_test_acc_anywhere": 0.8930390477180481
+    },
+    {
+      "seed": 2,
+      "use_pendulum": true,
+      "wall_seconds": 223.86692881584167,
+      "final_train_acc": 1.0,
+      "final_test_acc": 1.0,
+      "best_test_acc_anywhere": 1.0
+    },
+    {
+      "seed": 3,
+      "use_pendulum": false,
+      "wall_seconds": 213.9898660182953,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.9898132681846619,
+      "best_test_acc_anywhere": 1.0
+    },
+    {
+      "seed": 3,
+      "use_pendulum": true,
+      "wall_seconds": 205.7642183303833,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.9898132681846619,
+      "best_test_acc_anywhere": 1.0
+    },
+    {
+      "seed": 4,
+      "use_pendulum": false,
+      "wall_seconds": 125.11541533470154,
+      "final_train_acc": 1.0,
+      "final_test_acc": 0.25127336382865906,
+      "best_test_acc_anywhere": 0.2886247932910919
+    },
+    {
+      "seed": 4,
+      "use_pendulum": true,
+      "wall_seconds": 271.61764216423035,
+      "final_train_acc": 0.9880952835083008,
+      "final_test_acc": 0.31578949093818665,
+      "best_test_acc_anywhere": 0.33955857157707214
+    }
+  ],
+  "summary": {
+    "baseline_mean_final": 0.573853999376297,
+    "baseline_std_final": 0.3299838570394911,
+    "pendulum_mean_final": 0.8118845641613006,
+    "pendulum_std_final": 0.2942559656530508,
+    "paired_delta_mean": 0.23803056478500367,
+    "paired_delta_std": 0.25595151095403185,
+    "pendulum_wins": 4
+  }
+}
