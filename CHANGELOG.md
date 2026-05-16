@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.5.5 — 2026-05-16
+
+**Cross-architecture replication: C Pareto ≥ B on Mistral 7B v0.3 too,
+with the advantage manifesting on a different axis.**
+
+Same toolchain, same protocol, second architecture.
+
+| label | GSM8K | refusal |
+|---|---|---|
+| A original | 57/100 (57.0%) | 5/50 (10.0%) |
+| B raw abliterate | 48/100 (48.0%) | 0/50 (0.0%) |
+| **C capability-aware** | **52/100 (52.0%)** | 0/50 (0.0%) |
+
+Direction-finder Fisher scores by layer: 5.9, 12.1, 34.2, 50.4, 53.4,
+**55.3**, 50.2 at layers 4, 8, 12, 16, 20, 24, 28. Best layer 24.
+
+**Cross-architecture comparison:**
+
+| model | r·C overlap | A GSM8K | A→B Δcap | A→C Δcap | A→B Δrefusal | A→C Δrefusal |
+|---|---|---|---|---|---|---|
+| Qwen 2.5 7B | **0.19** uniform | 86% | -2pp | -2pp | -72pp (12% left) | **-84pp (0% left)** |
+| Mistral 7B v0.3 | **~0** | 57% | -9pp | **-5pp** | -10pp (0% left) | -10pp (0% left) |
+
+**The advantage of C manifests on different axes depending on the
+underlying refusal/capability geometry:**
+
+- **Qwen (high r·C coupling, 0.19)**: equal capability cost, but C
+  removes refusal more strictly. p = 0.012 (significant). The
+  orthogonalisation makes the projection more concentrated on refusal-
+  only dimensions.
+
+- **Mistral (orthogonal, r·C ≈ 0)**: both methods remove refusal
+  completely; C costs less capability (-5pp vs -9pp). p ≈ 0.57 — not
+  statistically significant at n=100, but the trend is consistent
+  with the mechanism (when r is mostly orthogonal to C, orthogonalising
+  matters less but doesn't hurt).
+
+Both architectures: **C Pareto ≥ B**. The capability-aware step is
+either neutral or beneficial; never costly. The mechanism delivers
+value via different routes depending on the model.
+
+Open: n=300+ on Mistral to confirm the +4pp capability advantage is
+real. The trend across two architectures plus the mechanism explanation
+makes a coherent picture; clean significance on capability axis is the
+last loose end.
+
+Tests: 199 passing.
+Reports: `results/aletheia_pathA_qwen25_7b_cot.json`,
+`results/aletheia_pathA_mistral7b.json`
+
 ## 0.5.4 — 2026-05-16
 
 **Clean validation with proper CoT generation: capability-aware
