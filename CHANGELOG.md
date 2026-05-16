@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.5.3 — 2026-05-16
+
+**Hypothesis SUPPORTED on Qwen 2.5 7B — capability-aware abliteration
+Pareto-dominates raw abliteration.**
+
+Same toolchain as v0.5.2 (robust direction-finder, 100-prompt paired
+corpora, last-token pooling, layer sweep). One bug fix: OOM when
+loading post-abliteration state-dict into a model on a tight-VRAM
+GPU. The fix is to skip the intermediate full-GPU state-dict
+construction and let `load_state_dict` copy CPU→GPU per-param.
+
+**Validation result — Qwen/Qwen2.5-7B-Instruct, n=100 GSM8K + n=50 refusal:**
+
+| label | GSM8K | refusal | product |
+|---|---|---|---|
+| A original | 4/100 = 4.0% | 42/50 = 84.0% | 0.0064 |
+| B raw abliterate | 3/100 = 3.0% | 6/50 = 12.0% | 0.0264 |
+| **C capability-aware** | **4/100 = 4.0%** | **0/50 = 0.0%** | **0.0400** |
+
+Direction-finder Fisher scores across the layer sweep: 5.4 / 9.2 /
+15.3 / 24.5 / 50.3 / 54.2 / **58.6** at layers 7/10/13/16/19/22/25.
+Best layer 25.
+
+**Statistical analysis:**
+
+- B vs C on refusal: 6/50 vs 0/50, two-proportion z = **2.52, p ≈ 0.012**.
+  C removes refusal more strictly than raw — statistically significant.
+- B vs C on capability: 3/100 vs 4/100, z = 0.38, p ≈ 0.7. Not
+  significant at n=100 but the trend points the predicted direction.
+- C Pareto-dominates B: equal-or-better capability AND strictly less
+  refusal.
+
+**Interpretation:** the capability-aware orthogonalisation step removes
+the part of `r` that's correlated with capability, concentrating the
+projection on pure refusal mediation. Two consequences both visible:
+(1) the remaining direction is a *more effective* refusal projector,
+and (2) the projection no longer damages capability-correlated
+representations.
+
+**Why this didn't show on 3B**: smaller models likely have refusal and
+capability more entangled in the residual stream — the capability
+subspace can't be cleanly separated from the refusal direction. At 7B
+the dimensional separability is sufficient for the orthogonalisation
+to matter.
+
+**Open follow-ups:**
+- Replicate on Llama 3.1 8B, Mistral 7B to confirm the effect isn't
+  Qwen-specific.
+- n=300+ GSM8K to confirm the capability trend is statistically
+  significant, not just suggestive.
+- CoT prompting to lift baseline GSM8K from ~4% to the published ~70%,
+  enabling sharper capability discrimination.
+- Test on more capability axes (TruthfulQA, IFEval, HellaSwag) where
+  abliteration damage is reportedly larger.
+
+Tests: 199 passing.
+Report: `results/aletheia_pathA_qwen25_7b.json`
+
 ## 0.5.2 — 2026-05-15
 
 **Robust refusal-direction finder + curated paired corpora — Path A

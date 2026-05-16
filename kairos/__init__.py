@@ -69,7 +69,7 @@ from .antiresonant_init import KairosAntiResonantInit, AntiResonantReport
 from .bundles import recommended_bundle
 from . import aletheia  # noqa: F401 -- salvaged subpackage
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 __all__ = [
     "Action",

@@ -181,9 +181,15 @@ def main() -> int:
     # Step 5: load B into the model in-place + eval
     # ------------------------------------------------------------------
     print(f"\nevaluating B (raw-direction abliteration) ...", flush=True)
-    b_sd_gpu = {k: v.to(model.device) for k, v in b_sd_cpu.items()}
-    model.load_state_dict(b_sd_gpu, strict=False)
-    del b_sd_gpu
+    # Free A's CPU state-dict copy — only need it once to derive B and C.
+    # Loading the CPU dict via load_state_dict copies per-param into the
+    # model's existing GPU buffers (no intermediate full-GPU copy).
+    del a_sd_cpu
+    import gc
+    gc.collect()
+    if args.device == "cuda":
+        torch.cuda.empty_cache()
+    model.load_state_dict(b_sd_cpu, strict=False)
     summary["B_raw"] = evaluate_model(
         model, tok, label="B_raw",
         gsm8k_n=args.gsm8k_samples,
@@ -195,9 +201,11 @@ def main() -> int:
     # Step 6: load C into the model in-place + eval
     # ------------------------------------------------------------------
     print(f"\nevaluating C (capability-aware abliteration) ...", flush=True)
-    c_sd_gpu = {k: v.to(model.device) for k, v in c_sd_cpu.items()}
-    model.load_state_dict(c_sd_gpu, strict=False)
-    del c_sd_gpu
+    del b_sd_cpu
+    gc.collect()
+    if args.device == "cuda":
+        torch.cuda.empty_cache()
+    model.load_state_dict(c_sd_cpu, strict=False)
     summary["C_capability_aware"] = evaluate_model(
         model, tok, label="C_capability_aware",
         gsm8k_n=args.gsm8k_samples,

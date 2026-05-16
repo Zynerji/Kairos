@@ -1,0 +1,47 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "n_refusal_probe": 100,
+  "n_capability_probe": 64,
+  "pool": "last",
+  "best_layer": 25,
+  "fisher_score": 58.59472172427276,
+  "capability_layer": 25,
+  "axis_overlaps": {
+    "math": 0.18985049426555634,
+    "factuality": 0.18506395816802979,
+    "instruction": 0.1845518946647644,
+    "reasoning": 0.18886029720306396
+  },
+  "n_touched_B": 56,
+  "n_touched_C": 56,
+  "scores": {
+    "A_original": {
+      "label": "A_original",
+      "gsm8k_accuracy": 0.04,
+      "gsm8k_n": 100,
+      "gsm8k_wall_s": 663.3803203105927,
+      "refusal_rate": 0.84,
+      "refusal_n": 50,
+      "refusal_wall_s": 131.37099242210388
+    },
+    "B_raw": {
+      "label": "B_raw",
+      "gsm8k_accuracy": 0.03,
+      "gsm8k_n": 100,
+      "gsm8k_wall_s": 677.2616183757782,
+      "refusal_rate": 0.12,
+      "refusal_n": 50,
+      "refusal_wall_s": 191.50302839279175
+    },
+    "C_capability_aware": {
+      "label": "C_capability_aware",
+      "gsm8k_accuracy": 0.04,
+      "gsm8k_n": 100,
+      "gsm8k_wall_s": 651.9697127342224,
+      "refusal_rate": 0.0,
+      "refusal_n": 50,
+      "refusal_wall_s": 89.2013635635376
+    }
+  },
+  "verdict": "C BEATS B (capability preserved, refusal kept)"
+}
