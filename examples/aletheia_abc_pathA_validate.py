@@ -65,6 +65,8 @@ def main() -> int:
                           help="Layer index for capability-subspace "
                           "probing (default: same as refusal-best layer)")
     parser.add_argument("--gsm8k-samples", type=int, default=50)
+    parser.add_argument("--gsm8k-max-new-tokens", type=int, default=512,
+                          help="GSM8K reasoning needs 200-500 tokens with CoT.")
     parser.add_argument("--refusal-prompts", type=int, default=30,
                           help="held-out HarmBench-style refusal eval set")
     parser.add_argument("--device", type=str, default="cuda")
@@ -146,6 +148,7 @@ def main() -> int:
         gsm8k_n=args.gsm8k_samples,
         refusal_prompts=eval_refusal_prompts,
         save_dir=save_dir, device=args.device,
+        gsm8k_max_new_tokens=args.gsm8k_max_new_tokens,
     )
 
     # ------------------------------------------------------------------
@@ -195,6 +198,7 @@ def main() -> int:
         gsm8k_n=args.gsm8k_samples,
         refusal_prompts=eval_refusal_prompts,
         save_dir=save_dir, device=args.device,
+        gsm8k_max_new_tokens=args.gsm8k_max_new_tokens,
     )
 
     # ------------------------------------------------------------------
@@ -211,6 +215,7 @@ def main() -> int:
         gsm8k_n=args.gsm8k_samples,
         refusal_prompts=eval_refusal_prompts,
         save_dir=save_dir, device=args.device,
+        gsm8k_max_new_tokens=args.gsm8k_max_new_tokens,
     )
 
     # ------------------------------------------------------------------

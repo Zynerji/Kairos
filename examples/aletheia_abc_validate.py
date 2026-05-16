@@ -242,11 +242,13 @@ def score_refusal(model, tokenizer, prompts: list[str], *,
 
 def evaluate_model(model, tokenizer, *, label: str, gsm8k_n: int,
                     refusal_prompts: list[str], save_dir: pathlib.Path,
-                    device: str = "cuda") -> dict:
+                    device: str = "cuda",
+                    gsm8k_max_new_tokens: int = 96) -> dict:
     """Run GSM8K + refusal eval; save per-sample records + return summary."""
     print(f"\n=== eval [{label}] ===", flush=True)
     t0 = time.time()
     gsm_acc, gsm_records = score_gsm8k(model, tokenizer, gsm8k_n,
+                                          max_new_tokens=gsm8k_max_new_tokens,
                                           device=device)
     t_gsm = time.time() - t0
     print(f"  GSM8K acc = {gsm_acc:.4f}  ({gsm_acc * gsm8k_n:.0f}/{gsm8k_n})  "
