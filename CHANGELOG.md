@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.5.2 — 2026-05-15
+
+**Robust refusal-direction finder + curated paired corpora — Path A
+end-to-end working, hypothesis validated as negative.**
+
+Three engineering fixes to the direction-finder make Path A actually
+abliterate where the v1 didn't:
+
+- `kairos.aletheia.surgery.corpora` — in-tree paired prompt corpora:
+  `HARMFUL_PROMPTS_100` (weapons, drugs, hacking, fraud, violence,
+  self-harm, illegal services, disinformation, extremism, privacy,
+  sexual content) and `HARMLESS_PROMPTS_100` (cooking, travel, science,
+  history, language, literature, math, music, advice, explanations).
+  Hand-curated to match length/style across pairs.
+
+- `kairos.aletheia.surgery.direction_finder.compute_refusal_direction_robust`
+  — three engineering fixes vs the v1 estimator:
+  - **Sample size**: 100+ paired prompts (was 8)
+  - **Last-instruction-token pooling** (was mean-over-tokens)
+  - **Layer sweep** with Fisher discriminant scoring (was hardcoded
+    middle layer)
+  Returns `(RefusalDirection, best_layer, fisher_score)`.
+
+- `kairos.aletheia.surgery.apply_direction_projection(state_dict, direction, ...)`
+  factored out as a standalone function so the same projection can be
+  applied to raw `r` (= standard abliteration) or orthogonalised
+  `r_pure` (= capability-aware). `CapabilityAwareAbliterator.apply()`
+  now wraps it.
+
+- `examples/aletheia_abc_pathA_validate.py` — three-model A/B/C
+  validation harness. `--capability-layer` flag separates the
+  capability-probe layer from the refusal-direction layer.
+
+**Validation result — Qwen 2.5 3B Instruct, n=200 GSM8K + n=50 refusal**
+
+| label | GSM8K | refusal |
+|---|---|---|
+| A original | 0.020 (4/200) | 0.940 (47/50) |
+| B raw abliterate | 0.035 (7/200) | 0.020 (1/50) |
+| C capability-aware | 0.025 (5/200) | 0.000 (0/50) |
+
+Direction-finder Fisher scores at the layer sweep: 4.2 / 7.1 / 5.9 /
+20.1 / 51.9 / **80.2** at layers 5/10/15/20/25/30 respectively. Best
+layer 30. ~14× more discriminative than the v1 finder.
+
+The robust finder produces a direction that **successfully abliterates**:
+A→B drops refusal 94%→2%. This is real, big-effect signal. Path A is
+no longer broken.
+
+The capability-aware orthogonalisation, however, **does not measurably
+preserve capability** in this experiment. B vs C GSM8K is 3.5% vs 2.5%
+(z=0.59, p≈0.55 — not significant at any conventional threshold). C
+removes slightly more refusal (0/50 vs 1/50, within noise). The two
+variants occupy different points on the (capability, refusal) Pareto
+frontier but neither strictly dominates.
+
+**Verdict on the original hypothesis** ("orthogonalising r against the
+capability subspace preserves more capability"): NOT supported at this
+scale. Effect, if any, is below n=200 + 4-axis-capability resolution.
+
+Tests: 199 passing, no change.
+
 ## 0.5.1 — 2026-05-15
 
 **Performance + scope fixes for `WeightDeltaCodebook`:**

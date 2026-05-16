@@ -69,7 +69,12 @@ from kairos.aletheia.surgery.codebook import (
 from kairos.aletheia.surgery.capability_aware_abliterate import (
     AbliterationReport,
     CapabilityAwareAbliterator,
+    apply_direction_projection,
 )
+from kairos.aletheia.surgery.direction_finder import (
+    compute_refusal_direction_robust,
+)
+from kairos.aletheia.surgery import corpora
 
 __all__ = [
     "AbliterationReport",
@@ -79,7 +84,10 @@ __all__ = [
     "LayerDelta",
     "RefusalDirection",
     "WeightDeltaCodebook",
+    "apply_direction_projection",
     "compute_capability_subspace",
     "compute_direction_from_activations",
+    "compute_refusal_direction_robust",
+    "corpora",
     "project_out_subspace",
 ]

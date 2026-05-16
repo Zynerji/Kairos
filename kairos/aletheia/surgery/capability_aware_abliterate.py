@@ -42,6 +42,85 @@ from kairos.aletheia.surgery.refusal_direction import (
 )
 
 
+def apply_direction_projection(
+    state_dict: dict,
+    direction,
+    *,
+    target_suffixes: list[str] | None = None,
+    skip_substrings: list[str] | None = None,
+    in_place: bool = False,
+) -> tuple[dict, dict]:
+    """Standard refusal-direction projection: ``W' = W − r·(rᵀ·W)`` for
+    every targeted weight matrix whose row-dim matches ``direction``.
+
+    Factored out of ``CapabilityAwareAbliterator.apply`` so the same
+    projection can be applied to either a raw refusal direction (=
+    standard Arditi abliteration) or an orthogonalised one (= our
+    capability-aware variant).
+
+    Parameters
+    ----------
+    state_dict : dict[str, Tensor]
+    direction : torch.Tensor, shape (d,)
+        Unit-norm direction to project out. Must match the row-dim of
+        target weight matrices.
+    target_suffixes : list[str] | None
+        Weight-key suffixes to project. Default:
+        ``["o_proj.weight", "down_proj.weight"]``.
+    skip_substrings : list[str] | None
+        Skip keys containing any substring. Default skips vision /
+        audio paths (multimodal models).
+    in_place : bool
+        Mutate ``state_dict`` directly. Default False (returns a
+        shallow copy with new tensor entries for touched keys).
+
+    Returns
+    -------
+    (new_state_dict, info)
+        info = {"touched_layers": list, "n_touched": int, "n_skipped": int}
+    """
+    import torch
+
+    if target_suffixes is None:
+        target_suffixes = ["o_proj.weight", "down_proj.weight"]
+    if skip_substrings is None:
+        skip_substrings = [
+            "vision_tower", "audio_tower", "multi_modal_projector",
+            "embed_audio", "embed_vision",
+        ]
+    r = direction
+    if r.dim() != 1:
+        raise ValueError(f"direction must be 1-D; got shape {tuple(r.shape)}")
+
+    out = state_dict if in_place else dict(state_dict)
+    touched: list[str] = []
+    n_skipped = 0
+    for name, w in state_dict.items():
+        if not any(name.endswith(s) for s in target_suffixes):
+            continue
+        if any(sub in name for sub in skip_substrings):
+            n_skipped += 1
+            continue
+        if w.dim() != 2:
+            continue
+        if w.shape[0] != r.shape[0]:
+            n_skipped += 1
+            continue
+        # Move r to whatever device/dtype W lives on for the math, then
+        # cast result back.
+        w_f = w.to(dtype=torch.float32)
+        r_dev = r.to(device=w_f.device, dtype=torch.float32)
+        # ΔW = r · (rᵀ · W)
+        proj = torch.outer(r_dev, r_dev @ w_f)
+        out[name] = (w_f - proj).to(w.dtype)
+        touched.append(name)
+    return out, {
+        "touched_layers": touched,
+        "n_touched": len(touched),
+        "n_skipped": n_skipped,
+    }
+
+
 @dataclass
 class AbliterationReport:
     n_touched: int = 0
@@ -126,39 +205,18 @@ class CapabilityAwareAbliterator:
         Returns a new state_dict (or mutates in place if ``in_place=True``)
         with target layers projected by ``r_pure``.
         """
-        import torch
-
         if self.r_pure is None:
             self.prepare()
-        r = self.r_pure
-
-        out = state_dict if in_place else dict(state_dict)
-        self.report.n_touched = 0
-        self.report.n_skipped = 0
-        self.report.touched_layers = []
-
-        for name, w in state_dict.items():
-            if not any(name.endswith(s) for s in self.target_suffixes):
-                continue
-            if any(sub in name for sub in self.skip_substrings):
-                self.report.n_skipped += 1
-                continue
-            if w.dim() != 2:
-                continue
-            # W writes from input space (d_in) into residual stream (d_out).
-            # r lives in d_out. The output along r is r · (rᵀ · W).
-            if w.shape[0] != r.shape[0]:
-                # Hidden dim mismatch — refusal direction was computed at
-                # a different layer width than this one. Skip silently.
-                self.report.n_skipped += 1
-                continue
-            # ΔW = r · (rᵀ · W)
-            w_f = w.float()
-            proj = torch.outer(r, r @ w_f)      # (d_out, d_in)
-            out[name] = (w_f - proj).to(w.dtype)
-            self.report.n_touched += 1
-            self.report.touched_layers.append(name)
-        return out
+        new_sd, info = apply_direction_projection(
+            state_dict, self.r_pure,
+            target_suffixes=self.target_suffixes,
+            skip_substrings=self.skip_substrings,
+            in_place=in_place,
+        )
+        self.report.n_touched = info["n_touched"]
+        self.report.n_skipped = info["n_skipped"]
+        self.report.touched_layers = info["touched_layers"]
+        return new_sd
 
     # ------------------------------------------------------------------
     # Codebook export

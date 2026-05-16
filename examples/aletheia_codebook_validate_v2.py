@@ -33,8 +33,8 @@ from examples.aletheia_abc_validate import (  # noqa: E402
 )
 
 
-MODEL_A = "google/gemma-4-E2B-it"
-MODEL_B = "huihui-ai/Huihui-gemma-4-E2B-it-abliterated"
+MODEL_A_DEFAULT = "google/gemma-4-E2B-it"
+MODEL_B_DEFAULT = "huihui-ai/Huihui-gemma-4-E2B-it-abliterated"
 
 
 # Generic "neutral" prompts — short, on-distribution, not aligned with
@@ -138,7 +138,13 @@ def main() -> int:
                           default="./codebook_validation_v2")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--reload-existing-eval", type=str, default=None)
+    parser.add_argument("--model-a", type=str, default=MODEL_A_DEFAULT,
+                          help="un-abliterated base model")
+    parser.add_argument("--model-b", type=str, default=MODEL_B_DEFAULT,
+                          help="abliterated derivative")
     args = parser.parse_args()
+    MODEL_A = args.model_a
+    MODEL_B = args.model_b
 
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
